@@ -1,6 +1,6 @@
 export function startLoop(update, render, step = 1/60){
   let last = performance.now(), acc = 0;
-  const MAX = 0.25; // clamp long frames
+  const MAX = 0.25;
   function frame(t){
     const dt = Math.min((t - last)/1000, MAX);
     last = t; acc += dt;

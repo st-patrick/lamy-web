@@ -1,9 +1,7 @@
-import { tileAt, isSolid } from "../world/level.js";
-
 export function tryMove(entity, mx, my, level){
   const nx = entity.x + mx, ny = entity.y + my;
 
-  // X axis
+  // X
   if (mx !== 0){
     const left = nx, right = nx + entity.w, top = entity.y, bottom = entity.y + entity.h;
     const testX = mx > 0 ? right : left;
@@ -12,8 +10,7 @@ export function tryMove(entity, mx, my, level){
       entity.x = tileX;
     } else entity.x = nx;
   }
-
-  // Y axis
+  // Y
   if (my !== 0){
     const left = entity.x, right = entity.x + entity.w, top = ny, bottom = ny + entity.h;
     const testY = my > 0 ? bottom : top;
@@ -23,8 +20,7 @@ export function tryMove(entity, mx, my, level){
     } else entity.y = ny;
   }
 }
-
 function hits(px, py, level){
   const tx = Math.floor(px), ty = Math.floor(py);
-  return isSolid(tileAt(level, tx, ty));
+  return level.isSolid(level.at(tx,ty));
 }

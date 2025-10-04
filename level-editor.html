@@ -1,152 +1,397 @@
 <!doctype html>
-<html lang="en">
-<head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Tiny Level Editor (tiles + spawn)</title>
+<title>Level Editor — Edge Exits + TOML</title>
 <style>
-  :root { --tile: 28; --grid:#cfd8dc; --wall:#000; --floor:#fff; --spawn:#1976d2; }
-  body{margin:0;font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f7f9fb;color:#222}
-  header,footer{padding:10px 12px;background:#fff;position:sticky;top:0;box-shadow:0 1px 0 rgba(0,0,0,.05);z-index:1}
-  main{padding:12px;display:grid;gap:12px}
+  :root { --grid:#cfd8dc; --wall:#000; --floor:#fff; --spawn:#1976d2; }
+  body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f6f7fb;color:#223}
+  header{position:sticky;top:0;background:#fff;box-shadow:0 1px 0 rgba(0,0,0,.06);z-index:2;padding:8px 12px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  input[type=number]{width:80px}
+  label{display:flex;gap:6px;align-items:center}
   button{padding:6px 10px;border-radius:8px;border:1px solid #c7d0d9;background:#fff;cursor:pointer}
   button.primary{background:#0ea5e9;border-color:#0ea5e9;color:#fff}
-  canvas{background:var(--floor);touch-action:none;image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1)}
-  textarea{width:100%;min-height:120px}
+  select,input[type=text],input[type=number]{padding:6px;border-radius:8px;border:1px solid #c7d0d9;background:#fff}
   .tool{padding:4px 8px;border:1px solid #c7d0d9;border-radius:6px;user-select:none}
   .tool.active{background:#e0f2fe;border-color:#0ea5e9}
+  #cv{background:var(--floor);image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1);touch-action:none}
+  .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none}
+  textarea{width:100%;min-height:120px}
+  #world{width:100%;height:44vh;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab}
+  #world:active{cursor:grabbing}
+  .edge{display:flex;gap:6px;align-items:center}
 </style>
-</head>
-<body>
+
 <header>
   <div class="row">
-    <label>Width <input id="w" type="number" min="4" max="200" value="24"></label>
-    <label>Height <input id="h" type="number" min="4" max="200" value="12"></label>
-    <button id="make" class="primary">Make Grid</button>
+    <button id="newMap">New Map</button>
+    <input id="mapName" type="text" placeholder="Map name"/>
+    <label>W<input id="w" type="number" min="4" max="300" value="24"></label>
+    <label>H<input id="h" type="number" min="4" max="300" value="12"></label>
+    <label>Spawn W<input id="sw" type="number" min="1" max="8" value="2"></label>
+    <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
+    <button id="resize" class="primary">Resize</button>
+
     <span class="tool" id="paintWall">Wall (#)</span>
     <span class="tool" id="paintErase">Erase ( )</span>
     <span class="tool" id="paintSpawn">Spawn (P)</span>
-    <button id="exportBtn">Export ASCII</button>
-    <button id="importBtn">Import ASCII</button>
+
+    <select id="maps"></select>
+    <button id="exportBtn">Export TOML</button>
+    <label><input id="importFiles" type="file" multiple accept=".toml"/> Load TOML(s)</label>
   </div>
+
+  <div class="row" style="margin-top:6px">
+    <div class="edge">Left→
+      <select id="edge_left"></select>
+    </div>
+    <div class="edge">Right→
+      <select id="edge_right"></select>
+    </div>
+    <div class="edge">Top→
+      <select id="edge_top"></select>
+    </div>
+    <div class="edge">Bottom→
+      <select id="edge_bottom"></select>
+    </div>
+  </div>
+
+  <div id="warn" class="banner"></div>
 </header>
 
-<main>
-  <canvas id="cv" width="800" height="480"></canvas>
+<main style="padding:12px;display:grid;gap:12px">
+  <canvas id="cv" width="960" height="540"></canvas>
+
   <section>
-    <strong>ASCII</strong>
-    <textarea id="ascii"></textarea>
+    <strong>Current map TOML</strong>
+    <textarea id="toml"></textarea>
   </section>
+
   <section>
-    <em>Tips:</em> Click/drag to paint. Press <strong>P</strong> to toggle Spawn tool quickly. Zoom your browser if you want bigger tiles.
+    <div class="row"><button id="renderWorld">World Overview</button>
+      <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="1"></label>
+    </div>
+    <canvas id="world"></canvas>
   </section>
 </main>
 
 <script>
-let grid = [], W=24, H=12, spawn = {x:1,y:1}, tool = "wall";
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
-const asciiEl = document.getElementById('ascii');
-const tools = { wall:document.getElementById('paintWall'),
-                erase:document.getElementById('paintErase'),
-                spawn:document.getElementById('paintSpawn') };
+const mapsSel = document.getElementById('maps');
+const nameIn = document.getElementById('mapName');
+const wIn = document.getElementById('w'), hIn = document.getElementById('h');
+const swIn = document.getElementById('sw'), shIn = document.getElementById('sh');
+const warn = document.getElementById('warn');
+const tomlArea = document.getElementById('toml');
 
-document.getElementById('w').oninput = e => W = clamp(+e.target.value, 4, 200);
-document.getElementById('h').oninput = e => H = clamp(+e.target.value, 4, 200);
-document.getElementById('make').onclick = () => { makeGrid(W,H); fit(); draw(); syncAscii(); };
-document.getElementById('exportBtn').onclick = () => { syncAscii(); asciiEl.select(); document.execCommand('copy'); };
-document.getElementById('importBtn').onclick = () => { importAscii(asciiEl.value); fit(); draw(); };
-Object.entries(tools).forEach(([k,el]) => el.onclick = ()=>setTool(k));
-addEventListener('keydown', e => { if (e.key.toLowerCase()==='p') setTool('spawn'); });
+const edgeSel = {
+  left: document.getElementById('edge_left'),
+  right: document.getElementById('edge_right'),
+  top: document.getElementById('edge_top'),
+  bottom: document.getElementById('edge_bottom'),
+};
 
-function setTool(t){ tool=t; for (const [k,el] of Object.entries(tools)) el.classList.toggle('active', k===t); }
-function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+const tools = { wall:'paintWall', erase:'paintErase', spawn:'paintSpawn' };
+let tool = 'wall';
 
-// initial
-makeGrid(W,H); fit(); draw(); syncAscii(); setTool('wall');
+// Internal model (by UUID)
+const model = {
+  maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
+  current: null
+};
+const CH = { wall:'#', floor:' ' };
 
-// painting
+function uuid(){
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
+    const r = Math.random()*16|0, v = c=='x' ? r : (r&0x3|0x8); return v.toString(16);
+  });
+}
+
+// Map CRUD
+function makeNewMap(){
+  const id = uuid();
+  const data = {
+    id, name: `Map ${model.maps.size+1}`,
+    W: +wIn.value || 24, H: +hIn.value || 12,
+    grid: Array.from({length:+hIn.value||12}, ()=>Array.from({length:+wIn.value||24}, ()=> CH.floor)),
+    spawn: {x:1,y:1,w:+swIn.value||2,h:+shIn.value||2},
+    exits: {left:null,right:null,top:null,bottom:null},
+    chars: {...CH}
+  };
+  model.maps.set(id, data);
+  setCurrent(id);
+}
+function setCurrent(id){
+  model.current = id;
+  syncHeader();
+  fit(); draw(); syncToml();
+}
+function cur(){ return model.maps.get(model.current); }
+
+// UI wiring
+document.getElementById('newMap').onclick = makeNewMap;
+document.getElementById('resize').onclick = ()=>{
+  const m=cur(); m.W=+wIn.value; m.H=+hIn.value;
+  m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> m.grid[y]?.[x] ?? CH.floor));
+  m.spawn.w = +swIn.value; m.spawn.h = +shIn.value;
+  fit(); draw(); syncToml(); validateSpawn();
+};
+mapsSel.onchange = e => setCurrent(e.target.value);
+nameIn.onchange = e => { cur().name = e.target.value || cur().name; syncHeader(); syncToml(); };
+
+for (const side of ["left","right","top","bottom"]){
+  edgeSel[side].onchange = e => {
+    const m = cur();
+    const val = e.target.value || null;
+    m.exits[side] = val === "none" ? null : val;
+    syncToml();
+  };
+}
+
+document.getElementById('exportBtn').onclick = ()=>{
+  const blob = new Blob([toToml(cur())], {type:'text/plain'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = (cur().name.replace(/\s+/g,'_').toLowerCase() + ".toml"); a.click();
+};
+
+document.getElementById('importFiles').addEventListener('change', async (e)=>{
+  const files = Array.from(e.target.files);
+  for (const f of files){
+    const txt = await f.text();
+    const obj = fromToml(txt);
+    model.maps.set(obj.id, obj);
+  }
+  setCurrent(model.current ?? model.maps.keys().next().value);
+});
+
 let down=false;
-cv.addEventListener('pointerdown', e => { down=true; paint(e); });
-cv.addEventListener('pointermove', e => { if (down) paint(e); });
-addEventListener('pointerup',   () => down=false);
-cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('pointerdown', e=>{ down=true; paint(e); });
+cv.addEventListener('pointermove', e=>{ if (down) paint(e); });
+addEventListener('pointerup', ()=> down=false);
+addEventListener('keydown', e=>{ if (e.key.toLowerCase()==='p') setTool('spawn'); });
 
-function paint(e){
-  const {x,y} = toCell(e);
-  if (!inBounds(x,y)) return;
-  if (tool==='wall'){ grid[y][x] = '#'; }
-  else if (tool==='erase'){ grid[y][x] = ' '; }
-  else if (tool==='spawn'){ spawn = {x,y}; tool='wall'; setTool('wall'); }
-  draw(); syncAscii();
+function setTool(t){
+  tool = t;
+  for (const [k,id] of Object.entries(tools)){
+    document.getElementById(id).classList.toggle('active', k===t);
+  }
 }
-
-function makeGrid(w,h){
-  W=w; H=h;
-  grid = Array.from({length:H}, ()=>Array.from({length:W}, ()=> ' '));
-  spawn = {x:1,y:1};
-}
-
-function importAscii(text){
-  const rows = text.trim().split('\n');
-  H = rows.length; W = Math.max(...rows.map(r=>r.length));
-  grid = Array.from({length:H}, (_,y)=>Array.from({length:W},(_,x)=>{
-    const ch = rows[y][x] ?? ' '; if (ch==='P'){ spawn={x,y}; return ' '; } return ch;
-  }));
-  document.getElementById('w').value = W;
-  document.getElementById('h').value = H;
-}
-
-function syncAscii(){
-  const lines = grid.map((row,y)=>row.map((ch,x)=> (x===spawn.x && y===spawn.y) ? 'P' : ch).join(''));
-  asciiEl.value = lines.join('\n');
-}
+for (const [k,id] of Object.entries(tools)){ document.getElementById(id).onclick = ()=> setTool(k); }
+setTool('wall');
 
 function toCell(e){
   const rect = cv.getBoundingClientRect();
   const px = e.clientX - rect.left, py = e.clientY - rect.top;
-  const tw = cv.width / W, th = cv.height / H;
+  const tw = cv.width / cur().W, th = cv.height / cur().H;
   return { x: Math.floor(px / tw), y: Math.floor(py / th) };
 }
-function inBounds(x,y){ return x>=0 && y>=0 && x<W && y<H; }
+function inBounds(x,y){ const m=cur(); return x>=0 && y>=0 && x<m.W && y<m.H; }
 
+function paint(e){
+  const m = cur(); const {x,y} = toCell(e); if (!inBounds(x,y)) return;
+  if (tool==='wall'){ m.grid[y][x] = m.chars.wall; }
+  else if (tool==='erase'){ m.grid[y][x] = m.chars.floor; }
+  else if (tool==='spawn'){ m.spawn.x = x; m.spawn.y = y; }
+  draw(); syncToml(); validateSpawn();
+}
+
+// Spawn validation
+function validateSpawn(){
+  const m = cur();
+  const ok = rectIsClear(m, m.spawn.x, m.spawn.y, m.spawn.w, m.spawn.h);
+  warn.style.display = ok ? 'none' : 'block';
+  warn.textContent = ok ? '' : 'Spawn overlaps walls: ensure a clear area of size Spawn W×H.';
+}
+
+// Header / selects
+function syncHeader(){
+  const m = cur();
+  nameIn.value = m.name;
+  wIn.value = m.W; hIn.value = m.H; swIn.value = m.spawn.w; shIn.value = m.spawn.h;
+
+  mapsSel.innerHTML = '';
+  for (const [id, map] of model.maps.entries()){
+    const o = document.createElement('option'); o.value=id; o.textContent=`${map.name} (${id.slice(0,8)})`;
+    if (id===model.current) o.selected = true; mapsSel.appendChild(o);
+  }
+  // edge selects
+  const opts = [['none','— None —'], ...Array.from(model.maps.entries()).map(([id,m])=>[id, m.name])];
+  for (const side of ["left","right","top","bottom"]){
+    const sel = edgeSel[side]; const prev = sel.value;
+    sel.innerHTML = ''; for (const [val,label] of opts){ const o=document.createElement('option'); o.value=val; o.textContent=label; sel.appendChild(o); }
+    sel.value = cur().exits[side] ?? 'none';
+  }
+  validateSpawn();
+}
+
+// Render map
 function fit(){
-  // scale canvas to keep aspect and use available width
-  const maxW = Math.min(innerWidth - 24, 1100);
-  const aspect = W / H;
+  const maxW = Math.min(innerWidth - 24, 1200);
+  const aspect = cur().W / cur().H;
   let cw = maxW, ch = Math.round(cw / aspect);
-  const maxH = innerHeight * 0.6;
+  const maxH = innerHeight * 0.55;
   if (ch > maxH){ ch = Math.round(maxH); cw = Math.round(ch * aspect); }
   cv.width = cw; cv.height = ch;
 }
-
-addEventListener('resize', () => { fit(); draw(); });
+addEventListener('resize', ()=>{ fit(); draw(); });
 
 function draw(){
-  const tw = cv.width / W, th = cv.height / H;
-  // background
+  const m = cur();
+  const tw = cv.width / m.W, th = cv.height / m.H;
+
   ctx.fillStyle = getCSS('--floor','#fff'); ctx.fillRect(0,0,cv.width,cv.height);
-  // gridlines
+
+  // grid
   ctx.strokeStyle = getCSS('--grid','#cfd8dc'); ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let x=0;x<=W;x++){ const px = Math.round(x*tw)+.5; ctx.moveTo(px,0); ctx.lineTo(px,cv.height); }
-  for (let y=0;y<=H;y++){ const py = Math.round(y*th)+.5; ctx.moveTo(0,py); ctx.lineTo(cv.width,py); }
+  for (let x=0;x<=m.W;x++){ const px = Math.round(x*tw)+.5; ctx.moveTo(px,0); ctx.lineTo(px,cv.height); }
+  for (let y=0;y<=m.H;y++){ const py = Math.round(y*th)+.5; ctx.moveTo(0,py); ctx.lineTo(cv.width,py); }
   ctx.stroke();
 
   // tiles
-  for (let y=0;y<H;y++) for (let x=0;x<W;x++){
-    if (grid[y][x]==='#'){
-      ctx.fillStyle = getCSS('--wall','#000');
-      ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th));
+  for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+    if (m.grid[y][x]===m.chars.wall){ ctx.fillStyle = getCSS('--wall','#000'); ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th)); }
+  }
+  // spawn rectangle
+  ctx.fillStyle = getCSS('--spawn','#1976d2');
+  ctx.fillRect(Math.round(m.spawn.x*tw), Math.round(m.spawn.y*th), Math.ceil(m.spawn.w*tw), Math.ceil(m.spawn.h*th));
+}
+
+// TOML IO
+function toToml(m){
+  return [
+    `id = "${m.id}"`,
+    `name = "${m.name.replace(/"/g,'\\"')}"`,
+    ``,
+    `[tiles]`,
+    `wall = "${m.chars.wall}"`,
+    `floor = "${m.chars.floor}"`,
+    ``,
+    `[spawn]`,
+    `x = ${m.spawn.x}`, `y = ${m.spawn.y}`, `w = ${m.spawn.w}`, `h = ${m.spawn.h}`,
+    ``,
+    `grid = """`,
+    ...m.grid.map(r => r.join("")),
+    `"""`,
+    ``,
+    `[exits]`,
+    ...(m.exits.left   ? [`left = "${m.exits.left}"`]   : []),
+    ...(m.exits.right  ? [`right = "${m.exits.right}"`] : []),
+    ...(m.exits.top    ? [`top = "${m.exits.top}"`]     : []),
+    ...(m.exits.bottom ? [`bottom = "${m.exits.bottom}"`] : []),
+    ``
+  ].join("\n");
+}
+function fromToml(txt){
+  const t = parseTOML(txt);
+  const rows = t.grid.replace(/\s+$/,"").split("\n");
+  const H = rows.length, W = Math.max(...rows.map(r=>r.length));
+  const grid = Array.from({length:H}, (_,y)=>Array.from({length:W},(_,x)=>rows[y][x] ?? (t.tiles?.floor ?? ' ')));
+  return {
+    id: t.id, name: t.name || t.id.slice(0,8),
+    W, H, grid,
+    spawn: { x: t.spawn.x, y: t.spawn.y, w: t.spawn.w, h: t.spawn.h },
+    exits: { left: t.exits?.left ?? null, right: t.exits?.right ?? null, top: t.exits?.top ?? null, bottom: t.exits?.bottom ?? null },
+    chars: { wall: t.tiles?.wall ?? '#', floor: t.tiles?.floor ?? ' ' }
+  };
+}
+function parseTOML(src){
+  const out = {}; let ctx = out, inML=false, mlKey="", mlBuf=[];
+  const lines = src.replace(/\r\n?/g,"\n").split("\n");
+  const set=(obj,k,v)=>obj[k]=v;
+  for (let raw of lines){
+    const line = raw.trim();
+    if (!inML){
+      if (!line || line.startsWith("#")) continue;
+      let m;
+      if ((m=line.match(/^\[([A-Za-z0-9_]+)\]$/))){ const k=m[1]; out[k]??={}; ctx=out[k]; continue; }
+      if ((m=line.match(/^([A-Za-z0-9_]+)\s*=\s*"""$/))){ inML=true; mlKey=m[1]; mlBuf=[]; continue; }
+      if ((m=line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/))){
+        const k=m[1]; let rhs=m[2].trim(); let val;
+        if ((/^".*"$/.test(rhs)) || (/^'.*'$/.test(rhs))){ val=rhs.slice(1,-1); }
+        else if (/^(true|false)$/i.test(rhs)){ val=/^true$/i.test(rhs); }
+        else if (/^-?\d+$/.test(rhs)){ val=parseInt(rhs,10); }
+        else; // ignore unknown
+        set(ctx, k, val); continue;
+      }
+    } else {
+      if (line === `"""`){ set(ctx, mlKey, mlBuf.join("\n")); inML=false; mlKey=""; mlBuf=[]; }
+      else mlBuf.push(raw);
     }
   }
-  // spawn
-  ctx.fillStyle = getCSS('--spawn','#1976d2');
-  ctx.fillRect(Math.round(spawn.x*tw)+Math.floor(tw*0.2), Math.round(spawn.y*th)+Math.floor(th*0.2),
-               Math.ceil(tw*0.6), Math.ceil(th*0.6));
+  if (inML) throw new Error("Unterminated multiline string");
+  return out;
 }
-function getCSS(varName, fallback){ return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || fallback; }
+
+// World overview (simple)
+const worldCv = document.getElementById('world'), wctx = worldCv.getContext('2d');
+let Z=1, pan={x:20,y:20}, dragging=false, last={x:0,y:0};
+document.getElementById('renderWorld').onclick = drawWorld;
+document.getElementById('z').oninput = e => { Z=+e.target.value; drawWorld(); };
+worldCv.addEventListener('pointerdown', e=>{ dragging=true; last={x:e.clientX,y:e.clientY}; });
+addEventListener('pointerup', ()=> dragging=false);
+addEventListener('pointermove', e=>{ if (!dragging) return; pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY}; drawWorld(); });
+
+function layout(){
+  const pos = new Map(), q = [];
+  const start = model.current ?? Array.from(model.maps.keys())[0];
+  if (!start) return pos;
+  pos.set(start, {x:0,y:0}); q.push(start);
+  while(q.length){
+    const id = q.shift(), p = pos.get(id), m = model.maps.get(id);
+    const links = Object.entries(m.exits).filter(([,to])=>!!to);
+    for (const [side,to] of links){
+      if (!model.maps.has(to)) continue;
+      if (!pos.has(to)){
+        const d = side==="left"?{x:-1,y:0}:side==="right"?{x:1,y:0}:side==="top"?{x:0,y:-1}:{x:0,y:1};
+        pos.set(to,{x:p.x+(d.x||0),y:p.y+(d.y||0)}); q.push(to);
+      }
+    }
+  }
+  return pos;
+}
+function drawWorld(){
+  resizeWorld();
+  wctx.clearRect(0,0,worldCv.width,worldCv.height);
+  const pos = layout(); wctx.save(); wctx.translate(pan.x, pan.y); wctx.scale(Z,Z);
+  const tile = 6;
+
+  // links
+  wctx.strokeStyle="#4b5563"; wctx.lineWidth = 1/Z;
+  for (const [id,p] of pos){
+    const m = model.maps.get(id); if (!m) continue;
+    const A = {x: p.x*(m.W+4)*tile, y: p.y*(m.H+4)*tile, w: m.W*tile, h: m.H*tile};
+    for (const [side,to] of Object.entries(m.exits)){
+      if (!to || !pos.has(to)) continue;
+      const n = model.maps.get(to), q = pos.get(to);
+      const B = {x: q.x*(n.W+4)*tile, y: q.y*(n.H+4)*tile, w: n.W*tile, h: n.H*tile};
+      wctx.beginPath(); wctx.moveTo(A.x+A.w/2, A.y+A.h/2); wctx.lineTo(B.x+B.w/2, B.y+B.h/2); wctx.stroke();
+    }
+  }
+  // maps
+  for (const [id,p] of pos){
+    const m = model.maps.get(id); if (!m) continue;
+    const ox = p.x*(m.W+4)*tile, oy = p.y*(m.H+4)*tile;
+    wctx.fillStyle="#111827"; wctx.fillRect(ox-4, oy-24, m.W*tile+8, m.H*tile+28);
+    wctx.fillStyle="#e5e7eb"; wctx.fillText(`${m.name}`, ox, oy-8);
+    for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+      wctx.fillStyle = (m.grid[y][x]===m.chars.wall) ? "#000" : "#fff";
+      wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+    }
+    wctx.fillStyle="#1976d2"; wctx.fillRect(ox+m.spawn.x*tile, oy+m.spawn.y*tile, m.spawn.w*tile, m.spawn.h*tile);
+  }
+  wctx.restore();
+}
+function resizeWorld(){ worldCv.width = innerWidth - 24; worldCv.height = Math.round(innerHeight * 0.44); }
+
+function rectIsClear(m, x, y, w, h){
+  for (let ty=y; ty<y+h; ty++) for (let tx=x; tx<x+w; tx++){
+    if (m.grid[ty]?.[tx] === m.chars.wall) return false;
+  }
+  return true;
+}
+function getCSS(name, fallback){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
+
+// Init
+makeNewMap();
 </script>
-</body>
-</html>
