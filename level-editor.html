@@ -19,6 +19,7 @@
   #world{width:100%;height:44vh;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab}
   #world:active{cursor:grabbing}
   .edge{display:flex;gap:6px;align-items:center}
+  .muted{color:#6b7280}
 </style>
 
 <header>
@@ -31,28 +32,21 @@
     <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
     <button id="resize" class="primary">Resize</button>
 
-    <span class="tool" id="paintWall">Wall (#)</span>
-    <span class="tool" id="paintErase">Erase ( )</span>
-    <span class="tool" id="paintSpawn">Spawn (P)</span>
+    <span class="tool" id="paintWall" title="1">Wall (#)</span>
+    <span class="tool" id="paintErase" title="2">Erase ( )</span>
+    <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
     <select id="maps"></select>
     <button id="exportBtn">Export TOML</button>
     <label><input id="importFiles" type="file" multiple accept=".toml"/> Load TOML(s)</label>
+    <button id="openFolder" style="display:none">Open Folder…</button><span id="fsHint" class="muted"></span>
   </div>
 
   <div class="row" style="margin-top:6px">
-    <div class="edge">Left→
-      <select id="edge_left"></select>
-    </div>
-    <div class="edge">Right→
-      <select id="edge_right"></select>
-    </div>
-    <div class="edge">Top→
-      <select id="edge_top"></select>
-    </div>
-    <div class="edge">Bottom→
-      <select id="edge_bottom"></select>
-    </div>
+    <div class="edge">Left→ <select id="edge_left"></select></div>
+    <div class="edge">Right→ <select id="edge_right"></select></div>
+    <div class="edge">Top→ <select id="edge_top"></select></div>
+    <div class="edge">Bottom→ <select id="edge_bottom"></select></div>
   </div>
 
   <div id="warn" class="banner"></div>
@@ -93,7 +87,7 @@ const edgeSel = {
 const tools = { wall:'paintWall', erase:'paintErase', spawn:'paintSpawn' };
 let tool = 'wall';
 
-// Internal model (by UUID)
+// Internal model
 const model = {
   maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
   current: null
@@ -124,7 +118,7 @@ function makeNewMap(){
 function setCurrent(id){
   model.current = id;
   syncHeader();
-  fit(); draw(); syncToml();
+  fit(); draw(); syncToml(); // <-- this existed but function was missing
 }
 function cur(){ return model.maps.get(model.current); }
 
@@ -143,10 +137,17 @@ for (const side of ["left","right","top","bottom"]){
   edgeSel[side].onchange = e => {
     const m = cur();
     const val = e.target.value || null;
-    m.exits[side] = val === "none" ? null : val;
+    m.exits[side] = (val === "none") ? null : val;
     syncToml();
   };
 }
+
+// Keyboard shortcuts: 1=wall, 2=erase, 3 or P=spawn
+addEventListener('keydown', e=>{
+  if (e.key === '1') setTool('wall');
+  if (e.key === '2') setTool('erase');
+  if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
+});
 
 document.getElementById('exportBtn').onclick = ()=>{
   const blob = new Blob([toToml(cur())], {type:'text/plain'});
@@ -164,11 +165,30 @@ document.getElementById('importFiles').addEventListener('change', async (e)=>{
   setCurrent(model.current ?? model.maps.keys().next().value);
 });
 
+// Optional: folder import (Chromium)
+const openFolderBtn = document.getElementById('openFolder');
+const fsHint = document.getElementById('fsHint');
+if ('showDirectoryPicker' in window){
+  openFolderBtn.style.display = 'inline-block';
+  fsHint.textContent = ' (Folder import available)';
+  openFolderBtn.onclick = async ()=>{
+    const dir = await window.showDirectoryPicker();
+    for await (const [name, handle] of dir.entries()){
+      if (name.toLowerCase().endsWith('.toml')){
+        const file = await handle.getFile();
+        const txt = await file.text();
+        const obj = fromToml(txt);
+        model.maps.set(obj.id, obj);
+      }
+    }
+    setCurrent(model.current ?? model.maps.keys().next().value);
+  };
+}
+
 let down=false;
 cv.addEventListener('pointerdown', e=>{ down=true; paint(e); });
 cv.addEventListener('pointermove', e=>{ if (down) paint(e); });
 addEventListener('pointerup', ()=> down=false);
-addEventListener('keydown', e=>{ if (e.key.toLowerCase()==='p') setTool('spawn'); });
 
 function setTool(t){
   tool = t;
@@ -217,11 +237,17 @@ function syncHeader(){
   // edge selects
   const opts = [['none','— None —'], ...Array.from(model.maps.entries()).map(([id,m])=>[id, m.name])];
   for (const side of ["left","right","top","bottom"]){
-    const sel = edgeSel[side]; const prev = sel.value;
-    sel.innerHTML = ''; for (const [val,label] of opts){ const o=document.createElement('option'); o.value=val; o.textContent=label; sel.appendChild(o); }
+    const sel = edgeSel[side];
+    sel.innerHTML = '';
+    for (const [val,label] of opts){ const o=document.createElement('option'); o.value=val; o.textContent=label; sel.appendChild(o); }
     sel.value = cur().exits[side] ?? 'none';
   }
   validateSpawn();
+}
+
+// Keep TOML textarea current  ✅ this was missing
+function syncToml(){
+  tomlArea.value = toToml(cur());
 }
 
 // Render map
@@ -250,7 +276,10 @@ function draw(){
 
   // tiles
   for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-    if (m.grid[y][x]===m.chars.wall){ ctx.fillStyle = getCSS('--wall','#000'); ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th)); }
+    if (m.grid[y][x]===m.chars.wall){
+      ctx.fillStyle = getCSS('--wall','#000');
+      ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th));
+    }
   }
   // spawn rectangle
   ctx.fillStyle = getCSS('--spawn','#1976d2');
@@ -333,18 +362,20 @@ addEventListener('pointerup', ()=> dragging=false);
 addEventListener('pointermove', e=>{ if (!dragging) return; pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY}; drawWorld(); });
 
 function layout(){
+  // BFS on directed edges; naive grid layout
   const pos = new Map(), q = [];
+  const DIR = { left:{x:-1,y:0}, right:{x:1,y:0}, top:{x:0,y:-1}, bottom:{x:0,y:1} };
   const start = model.current ?? Array.from(model.maps.keys())[0];
   if (!start) return pos;
   pos.set(start, {x:0,y:0}); q.push(start);
   while(q.length){
     const id = q.shift(), p = pos.get(id), m = model.maps.get(id);
-    const links = Object.entries(m.exits).filter(([,to])=>!!to);
-    for (const [side,to] of links){
-      if (!model.maps.has(to)) continue;
+    for (const [side,to] of Object.entries(m.exits)){
+      if (!to || !model.maps.has(to)) continue;
       if (!pos.has(to)){
-        const d = side==="left"?{x:-1,y:0}:side==="right"?{x:1,y:0}:side==="top"?{x:0,y:-1}:{x:0,y:1};
-        pos.set(to,{x:p.x+(d.x||0),y:p.y+(d.y||0)}); q.push(to);
+        const d = DIR[side];
+        pos.set(to, { x: p.x + d.x, y: p.y + d.y });
+        q.push(to);
       }
     }
   }
@@ -378,7 +409,8 @@ function drawWorld(){
       wctx.fillStyle = (m.grid[y][x]===m.chars.wall) ? "#000" : "#fff";
       wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
     }
-    wctx.fillStyle="#1976d2"; wctx.fillRect(ox+m.spawn.x*tile, oy+m.spawn.y*tile, m.spawn.w*tile, m.spawn.h*tile);
+    wctx.fillStyle="#1976d2";
+    wctx.fillRect(ox+m.spawn.x*tile, oy+m.spawn.y*tile, m.spawn.w*tile, m.spawn.h*tile);
   }
   wctx.restore();
 }
@@ -392,6 +424,6 @@ function rectIsClear(m, x, y, w, h){
 }
 function getCSS(name, fallback){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 
-// Init
+// Init with one map
 makeNewMap();
 </script>
