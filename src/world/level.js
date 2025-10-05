@@ -1,6 +1,6 @@
 import { parseTOML } from "./toml-lite.js";
 
-export const TILE = 12;
+export const TILE = 32;
 
 export function parseTomlLevel(tomlText){
   const t = parseTOML(tomlText);
@@ -12,9 +12,15 @@ export function parseTomlLevel(tomlText){
     floor: (t.tiles?.floor ?? " ")
   };
 
-  const rows = must(t.grid, "grid").split("\n");
+  // Preserve empty lines and trailing spaces (no trim!)
+  const rows = String(must(t.grid, "grid")).replace(/\r\n?/g, "\n").split("\n");
   const h = rows.length, w = Math.max(...rows.map(r => r.length));
-  const grid = Array.from({length:h}, (_,y)=>Array.from({length:w},(_,x)=>rows[y][x] ?? chars.floor));
+  const grid = Array.from({length:h}, (_,y)=> {
+    const line = rows[y] ?? "";
+    // pad each row to full width, preserving spaces intentionally
+    const padded = line.padEnd(w, chars.floor);
+    return Array.from({length:w}, (_,x)=> padded[x] ?? chars.floor);
+  });
 
   const spawn = {
     x: must(t.spawn?.x, "spawn.x"),

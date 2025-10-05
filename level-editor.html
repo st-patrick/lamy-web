@@ -14,11 +14,13 @@
   .tool{padding:4px 8px;border:1px solid #c7d0d9;border-radius:6px;user-select:none}
   .tool.active{background:#e0f2fe;border-color:#0ea5e9}
   #cv{background:var(--floor);image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1);touch-action:none}
-  .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none}
+  .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none;white-space:pre-line}
+  .ok{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
   textarea{width:100%;min-height:120px}
   #world{width:100%;height:44vh;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab}
   #world:active{cursor:grabbing}
   .edge{display:flex;gap:6px;align-items:center}
+  select.bad{border-color:#ef4444; background:#fee2e2;}
   .muted{color:#6b7280}
 </style>
 
@@ -26,8 +28,8 @@
   <div class="row">
     <button id="newMap">New Map</button>
     <input id="mapName" type="text" placeholder="Map name"/>
-    <label>W<input id="w" type="number" min="4" max="300" value="24"></label>
-    <label>H<input id="h" type="number" min="4" max="300" value="12"></label>
+    <label>W<input id="w" type="number" min="4" max="300" value="99"></label>
+    <label>H<input id="h" type="number" min="4" max="300" value="70"></label>
     <label>Spawn W<input id="sw" type="number" min="1" max="8" value="2"></label>
     <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
     <button id="resize" class="primary">Resize</button>
@@ -43,9 +45,9 @@
   </div>
 
   <div class="row" style="margin-top:6px">
-    <div class="edge">Left→ <select id="edge_left"></select></div>
-    <div class="edge">Right→ <select id="edge_right"></select></div>
-    <div class="edge">Top→ <select id="edge_top"></select></div>
+    <div class="edge">Left→   <select id="edge_left"></select></div>
+    <div class="edge">Right→  <select id="edge_right"></select></div>
+    <div class="edge">Top→    <select id="edge_top"></select></div>
     <div class="edge">Bottom→ <select id="edge_bottom"></select></div>
   </div>
 
@@ -87,7 +89,6 @@ const edgeSel = {
 const tools = { wall:'paintWall', erase:'paintErase', spawn:'paintSpawn' };
 let tool = 'wall';
 
-// Internal model
 const model = {
   maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
   current: null
@@ -101,13 +102,12 @@ function uuid(){
   });
 }
 
-// Map CRUD
 function makeNewMap(){
   const id = uuid();
   const data = {
     id, name: `Map ${model.maps.size+1}`,
-    W: +wIn.value || 24, H: +hIn.value || 12,
-    grid: Array.from({length:+hIn.value||12}, ()=>Array.from({length:+wIn.value||24}, ()=> CH.floor)),
+    W: +wIn.value || 99, H: +hIn.value || 70,
+    grid: Array.from({length:+hIn.value||70}, ()=>Array.from({length:+wIn.value||99}, ()=> CH.floor)),
     spawn: {x:1,y:1,w:+swIn.value||2,h:+shIn.value||2},
     exits: {left:null,right:null,top:null,bottom:null},
     chars: {...CH}
@@ -118,28 +118,44 @@ function makeNewMap(){
 function setCurrent(id){
   model.current = id;
   syncHeader();
-  fit(); draw(); syncToml(); // <-- this existed but function was missing
+  fit(); draw(); syncToml(); runLint();
 }
 function cur(){ return model.maps.get(model.current); }
+
+// ————— Edge helpers —————
+const OPP = { left:"right", right:"left", top:"bottom", bottom:"top" };
+
+// When a select changes, set A.side = B, and auto-recursively set B.OPP = A if empty or already pointing to A.
+function onEdgeChange(side, toId){
+  const A = cur(); // current map
+  A.exits[side] = (toId === "none") ? null : toId || null;
+
+  // auto-reciprocal if target exists
+  if (A.exits[side] && model.maps.has(A.exits[side])){
+    const B = model.maps.get(A.exits[side]);
+    const opp = OPP[side];
+    if (!B.exits[opp] || B.exits[opp] === A.id){
+      B.exits[opp] = A.id;
+    }
+  }
+  syncHeader();
+  syncToml();
+  runLint();
+}
 
 // UI wiring
 document.getElementById('newMap').onclick = makeNewMap;
 document.getElementById('resize').onclick = ()=>{
   const m=cur(); m.W=+wIn.value; m.H=+hIn.value;
-  m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> m.grid[y]?.[x] ?? CH.floor));
+  m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> (m.grid[y]?.[x] ?? CH.floor)));
   m.spawn.w = +swIn.value; m.spawn.h = +shIn.value;
-  fit(); draw(); syncToml(); validateSpawn();
+  fit(); draw(); syncToml(); validateSpawn(); runLint();
 };
 mapsSel.onchange = e => setCurrent(e.target.value);
-nameIn.onchange = e => { cur().name = e.target.value || cur().name; syncHeader(); syncToml(); };
+nameIn.onchange = e => { cur().name = e.target.value || cur().name; syncHeader(); syncToml(); runLint(); };
 
 for (const side of ["left","right","top","bottom"]){
-  edgeSel[side].onchange = e => {
-    const m = cur();
-    const val = e.target.value || null;
-    m.exits[side] = (val === "none") ? null : val;
-    syncToml();
-  };
+  edgeSel[side].onchange = e => onEdgeChange(side, e.target.value);
 }
 
 // Keyboard shortcuts: 1=wall, 2=erase, 3 or P=spawn
@@ -185,6 +201,45 @@ if ('showDirectoryPicker' in window){
   };
 }
 
+// Auto-discover ./maps/ on page load:
+// 1) try maps/manifest.json (["maps/plains.toml", ...])
+// 2) else parse the HTML listing at maps/ (works with `npx serve`)
+window.addEventListener('DOMContentLoaded', async ()=>{
+  let found = 0;
+  try {
+    let list = [];
+    const r = await fetch('maps/manifest.json');
+    if (r.ok) list = await r.json();
+
+    if (!list.length){
+      const d = await fetch('maps/'); // directory listing HTML
+      if (d.ok){
+        const html = await d.text();
+        const matches = [...html.matchAll(/href="([^"]+\.toml)"/g)];
+        list = matches.map(m => {
+          const href = m[1];
+          return href.startsWith('http') ? href : ('maps/' + href.replace(/^\.?\/?maps\//,''));
+        });
+      }
+    }
+
+    for (const url of list){
+      try{
+        const txt = await (await fetch(url)).text();
+        const obj = fromToml(txt);
+        model.maps.set(obj.id, obj);
+        found++;
+      }catch{}
+    }
+  } catch {}
+  if (found > 0) {
+    setCurrent(model.maps.keys().next().value);
+  } else {
+    makeNewMap();
+  }
+});
+
+// Painting
 let down=false;
 cv.addEventListener('pointerdown', e=>{ down=true; paint(e); });
 cv.addEventListener('pointermove', e=>{ if (down) paint(e); });
@@ -212,7 +267,7 @@ function paint(e){
   if (tool==='wall'){ m.grid[y][x] = m.chars.wall; }
   else if (tool==='erase'){ m.grid[y][x] = m.chars.floor; }
   else if (tool==='spawn'){ m.spawn.x = x; m.spawn.y = y; }
-  draw(); syncToml(); validateSpawn();
+  draw(); syncToml(); validateSpawn(); runLint();
 }
 
 // Spawn validation
@@ -234,10 +289,10 @@ function syncHeader(){
     const o = document.createElement('option'); o.value=id; o.textContent=`${map.name} (${id.slice(0,8)})`;
     if (id===model.current) o.selected = true; mapsSel.appendChild(o);
   }
-  // edge selects
   const opts = [['none','— None —'], ...Array.from(model.maps.entries()).map(([id,m])=>[id, m.name])];
   for (const side of ["left","right","top","bottom"]){
     const sel = edgeSel[side];
+    const prev = sel.value;
     sel.innerHTML = '';
     for (const [val,label] of opts){ const o=document.createElement('option'); o.value=val; o.textContent=label; sel.appendChild(o); }
     sel.value = cur().exits[side] ?? 'none';
@@ -245,10 +300,8 @@ function syncHeader(){
   validateSpawn();
 }
 
-// Keep TOML textarea current  ✅ this was missing
-function syncToml(){
-  tomlArea.value = toToml(cur());
-}
+// Keep TOML textarea current
+function syncToml(){ tomlArea.value = toToml(cur()); }
 
 // Render map
 function fit(){
@@ -274,7 +327,7 @@ function draw(){
   for (let y=0;y<=m.H;y++){ const py = Math.round(y*th)+.5; ctx.moveTo(0,py); ctx.lineTo(cv.width,py); }
   ctx.stroke();
 
-  // tiles
+  // tiles (draw all cells; spaces show as floor)
   for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
     if (m.grid[y][x]===m.chars.wall){
       ctx.fillStyle = getCSS('--wall','#000');
@@ -286,8 +339,9 @@ function draw(){
   ctx.fillRect(Math.round(m.spawn.x*tw), Math.round(m.spawn.y*th), Math.ceil(m.spawn.w*tw), Math.ceil(m.spawn.h*th));
 }
 
-// TOML IO
+// TOML IO — preserve whitespace and blank rows
 function toToml(m){
+  const lines = m.grid.map(r => r.join("")); // keep trailing spaces by not trimming
   return [
     `id = "${m.id}"`,
     `name = "${m.name.replace(/"/g,'\\"')}"`,
@@ -300,7 +354,7 @@ function toToml(m){
     `x = ${m.spawn.x}`, `y = ${m.spawn.y}`, `w = ${m.spawn.w}`, `h = ${m.spawn.h}`,
     ``,
     `grid = """`,
-    ...m.grid.map(r => r.join("")),
+    ...lines,
     `"""`,
     ``,
     `[exits]`,
@@ -313,9 +367,13 @@ function toToml(m){
 }
 function fromToml(txt){
   const t = parseTOML(txt);
-  const rows = t.grid.replace(/\s+$/,"").split("\n");
+  const rows = String(t.grid).replace(/\r\n?/g,"\n").split("\n"); // no trimming
   const H = rows.length, W = Math.max(...rows.map(r=>r.length));
-  const grid = Array.from({length:H}, (_,y)=>Array.from({length:W},(_,x)=>rows[y][x] ?? (t.tiles?.floor ?? ' ')));
+  const grid = Array.from({length:H}, (_,y)=>{
+    const line = rows[y] ?? "";
+    const padded = line.padEnd(W, (t.tiles?.floor ?? ' '));
+    return Array.from({length:W}, (_,x)=> padded[x] ?? (t.tiles?.floor ?? ' '));
+  });
   return {
     id: t.id, name: t.name || t.id.slice(0,8),
     W, H, grid,
@@ -352,7 +410,49 @@ function parseTOML(src){
   return out;
 }
 
-// World overview (simple)
+// Lint: dangling and conflicts
+function runLint(){
+  const problems = [];
+  // clear styles
+  for (const s of Object.values(edgeSel)) s.classList.remove('bad');
+
+  for (const [id,m] of model.maps.entries()){
+    for (const [side,to] of Object.entries(m.exits)){
+      if (!to) continue;
+      if (!model.maps.has(to)){
+        if (id === model.current) edgeSel[side].classList.add('bad');
+        problems.push(`Dangling: ${m.name} ${side} → ${to} (missing map)`);
+        continue;
+      }
+      const opp = OPP[side];
+      const n = model.maps.get(to);
+      if (!n.exits[opp]){
+        // auto-reciprocal if empty
+        n.exits[opp] = id;
+      } else if (n.exits[opp] !== id){
+        if (id === model.current) edgeSel[side].classList.add('bad');
+        problems.push(`Conflict: ${m.name} ${side} → ${n.name}, but ${n.name} ${opp} → ${short(n.exits[opp])}`);
+      }
+    }
+  }
+
+  if (problems.length){
+    warn.classList.remove('ok');
+    warn.style.display = 'block';
+    warn.textContent = problems.join("\n");
+  } else {
+    warn.classList.add('ok');
+    warn.style.display = 'block';
+    warn.textContent = '✓ No link issues';
+  }
+}
+
+function short(id){
+  const m = model.maps.get(id);
+  return m ? `${m.name}` : id.slice(0,8);
+}
+
+// World overview
 const worldCv = document.getElementById('world'), wctx = worldCv.getContext('2d');
 let Z=1, pan={x:20,y:20}, dragging=false, last={x:0,y:0};
 document.getElementById('renderWorld').onclick = drawWorld;
@@ -362,7 +462,6 @@ addEventListener('pointerup', ()=> dragging=false);
 addEventListener('pointermove', e=>{ if (!dragging) return; pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY}; drawWorld(); });
 
 function layout(){
-  // BFS on directed edges; naive grid layout
   const pos = new Map(), q = [];
   const DIR = { left:{x:-1,y:0}, right:{x:1,y:0}, top:{x:0,y:-1}, bottom:{x:0,y:1} };
   const start = model.current ?? Array.from(model.maps.keys())[0];
@@ -406,6 +505,7 @@ function drawWorld(){
     wctx.fillStyle="#111827"; wctx.fillRect(ox-4, oy-24, m.W*tile+8, m.H*tile+28);
     wctx.fillStyle="#e5e7eb"; wctx.fillText(`${m.name}`, ox, oy-8);
     for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+      // draw walls and floors; floors are visible to ensure empty rows/cols render
       wctx.fillStyle = (m.grid[y][x]===m.chars.wall) ? "#000" : "#fff";
       wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
     }
@@ -423,7 +523,4 @@ function rectIsClear(m, x, y, w, h){
   return true;
 }
 function getCSS(name, fallback){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
-
-// Init with one map
-makeNewMap();
 </script>

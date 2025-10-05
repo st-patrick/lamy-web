@@ -30,10 +30,9 @@ async function boot(){
   player = createPlayer(level.spawn);
   input  = createInput();
   render = createRenderer(canvas, level);
-  fitToWindowHeight(); // initial scale
+  fitToWindowHeight();
   startLoop(update, draw);
 
-  // UI
   fitBtn.onclick = ()=> fitToWindowHeight();
   zoomInBtn.onclick = ()=> setScale(render.getScale() + stepScale());
   zoomOutBtn.onclick = ()=> setScale(render.getScale() - stepScale());
@@ -53,7 +52,6 @@ function update(dt){
   const before = { x: player.x, y: player.y };
   updatePlayer(player, input.state, dt, level);
 
-  // Edge exit (pressing into edge)
   const atLeft   = player.x <= 0.001;
   const atRight  = player.x + player.w >= level.w - 0.001;
   const atTop    = player.y <= 0.001;
@@ -69,12 +67,10 @@ function switchMap(targetId, viaSide, prevPos){
   const node = atlas[targetId];
   if (!node){ console.warn("Missing target map: " + targetId); return; }
 
-  // Switch level & re-fit scale for the new height
   level = node.level;
   render = createRenderer(canvas, level);
   fitToWindowHeight();
 
-  // Place just inside opposite edge; preserve orthogonal ratio
   const ratioX = (prevPos.x + player.w/2) / Math.max(1, atlas[currentId].level.w);
   const ratioY = (prevPos.y + player.h/2) / Math.max(1, atlas[currentId].level.h);
 
@@ -90,13 +86,11 @@ function draw(){ render({ player, level }); }
 
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
-// —— Zoom helpers ——
+// Zoom helpers
 function fitToWindowHeight() {
-  // leave some header/footer margin (in CSS px)
-  const headerH = 64; // approx; not exact, just a safety margin
+  const headerH = 64;
   const avail = Math.max(200, window.innerHeight - headerH - 24);
-  // integer pixels-per-tile keeps pixels crisp
-  const s = Math.max(4, Math.floor(avail / level.h)); // min 4px/tile
+  const s = Math.max(4, Math.floor(avail / level.h));
   setScale(s);
 }
 function stepScale(){ return Math.max(1, Math.floor(render.getScale() * 0.1)); }
