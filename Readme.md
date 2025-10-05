@@ -1,5 +1,18 @@
 # Top-Down Action RPG — Engine Seed
 
+
+### upcoming
+allow "new map" in selecting edge where to go
+indicate issue when a map is a neighbor to another map twice (will break atlas, hence "teleport" would be a more fitting name probably)
+
+
+
+
+
+
+
+
+
 ## Goals
 - Deterministic, data-driven core with a tiny level spec.
 - Simple physics (AABB, axis-separated) that scales from 1×1 to N×N actors.
