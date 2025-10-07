@@ -217,26 +217,6 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     }
   } catch {}
 
-  // (2) directory listings (common variants)
-  const candidates = ['maps/','./maps/','/maps/'];
-  for (const base of candidates){
-    if (urls.size) break;
-    try {
-      const d = await fetch(base);
-      if (!d.ok) continue;
-      const html = await d.text();
-      // grab hrefs that end with .toml (absolute or relative)
-      const hrefs = [...html.matchAll(/href="([^"]+\.toml)"/gi)].map(m=>m[1]);
-      for (let h of hrefs){
-        if (!/^https?:/i.test(h)){
-          // ensure it’s under /maps/
-          if (!h.startsWith('maps/')) h = base.replace(/\/?$/,'/') + h.replace(/^\.?\//,'');
-        }
-        urls.add(h);
-      }
-    } catch {}
-  }
-
   // Load
   for (const url of urls){
     try{
@@ -473,13 +453,38 @@ function short(id){
 }
 
 // World overview
+// World overview — clickable atlas
 const worldCv = document.getElementById('world'), wctx = worldCv.getContext('2d');
 let Z=1, pan={x:20,y:20}, dragging=false, last={x:0,y:0};
+let worldRects = []; // [{id,x,y,w,h}] in world coords (pre-translate/scale)
+let hoverId = null;
+
 document.getElementById('renderWorld').onclick = drawWorld;
 document.getElementById('z').oninput = e => { Z=+e.target.value; drawWorld(); };
-worldCv.addEventListener('pointerdown', e=>{ dragging=true; last={x:e.clientX,y:e.clientY}; });
+
+worldCv.addEventListener('pointerdown', e=>{
+  const pt = worldPoint(e);
+  // If we clicked a map rect: select it; else begin pan
+  const hit = hitTest(pt.x, pt.y);
+  if (hit){ setCurrent(hit.id); drawWorld(); return; }
+  dragging=true; last={x:e.clientX,y:e.clientY};
+});
 addEventListener('pointerup', ()=> dragging=false);
-addEventListener('pointermove', e=>{ if (!dragging) return; pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY}; drawWorld(); });
+addEventListener('pointermove', e=>{
+  if (dragging){
+    pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY};
+    drawWorld(); return;
+  }
+  // hover
+  const pt = worldPoint(e);
+  const hit = hitTest(pt.x, pt.y);
+  const nextHover = hit ? hit.id : null;
+  if (nextHover !== hoverId){
+    hoverId = nextHover;
+    worldCv.style.cursor = hoverId ? 'pointer' : 'grab';
+    drawWorld();
+  }
+});
 
 function layout(){
   const pos = new Map(), q = [];
@@ -500,13 +505,16 @@ function layout(){
   }
   return pos;
 }
+
 function drawWorld(){
   resizeWorld();
   wctx.clearRect(0,0,worldCv.width,worldCv.height);
   const pos = layout(); wctx.save(); wctx.translate(pan.x, pan.y); wctx.scale(Z,Z);
   const tile = 6;
 
-  // links
+  worldRects = [];
+
+  // links first
   wctx.strokeStyle="#4b5563"; wctx.lineWidth = 1/Z;
   for (const [id,p] of pos){
     const m = model.maps.get(id); if (!m) continue;
@@ -518,23 +526,57 @@ function drawWorld(){
       wctx.beginPath(); wctx.moveTo(A.x+A.w/2, A.y+A.h/2); wctx.lineTo(B.x+B.w/2, B.y+B.h/2); wctx.stroke();
     }
   }
+
   // maps
   for (const [id,p] of pos){
     const m = model.maps.get(id); if (!m) continue;
     const ox = p.x*(m.W+4)*tile, oy = p.y*(m.H+4)*tile;
+    const rect = { id, x: ox, y: oy, w: m.W*tile, h: m.H*tile };
+    worldRects.push(rect);
+
+    // card bg + title
     wctx.fillStyle="#111827"; wctx.fillRect(ox-4, oy-24, m.W*tile+8, m.H*tile+28);
     wctx.fillStyle="#e5e7eb"; wctx.fillText(`${m.name}`, ox, oy-8);
+
+    // map cells
     for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-      // draw walls and floors; floors are visible to ensure empty rows/cols render
       wctx.fillStyle = (m.grid[y][x]===m.chars.wall) ? "#000" : "#fff";
       wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
     }
+
+    // spawn
     wctx.fillStyle="#1976d2";
     wctx.fillRect(ox+m.spawn.x*tile, oy+m.spawn.y*tile, m.spawn.w*tile, m.spawn.h*tile);
+
+    // highlight hover/current
+    if (id === hoverId || id === model.current){
+      wctx.lineWidth = 2/Z;
+      wctx.strokeStyle = (id === model.current) ? "#22c55e" : "#eab308";
+      wctx.strokeRect(rect.x-2, rect.y-2, rect.w+4, rect.h+4);
+    }
   }
+
   wctx.restore();
 }
+
 function resizeWorld(){ worldCv.width = innerWidth - 24; worldCv.height = Math.round(innerHeight * 0.44); }
+
+function worldPoint(e){
+  const r = worldCv.getBoundingClientRect();
+  const x = (e.clientX - r.left - pan.x) / Z;
+  const y = (e.clientY - r.top  - pan.y) / Z;
+  return { x, y };
+}
+function hitTest(x,y){
+  for (let i=worldRects.length-1;i>=0;i--){
+    const r = worldRects[i];
+    if (x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h) return r;
+  }
+  return null;
+}
+
+
+
 
 function rectIsClear(m, x, y, w, h){
   for (let ty=y; ty<y+h; ty++) for (let tx=x; tx<x+w; tx++){
