@@ -5,7 +5,7 @@ import { createRenderer } from "./view/render.js";
 import { loadAtlasFromTomls } from "./world/atlas.js";
 import { rectIsClear } from "./world/level.js";
 
-const MAP_FILES = ["./maps/plains.toml","./maps/cave.toml"];
+const MAP_FILES = ["./maps/plains.toml","./maps/cave.toml","./maps/town_square.toml"];
 
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
 
