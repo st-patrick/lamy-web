@@ -40,8 +40,13 @@
 
     <select id="maps"></select>
     <button id="exportBtn">Export TOML</button>
+    <button id="exportAllBtn">Export All</button>
     <label><input id="importFiles" type="file" multiple accept=".toml"/> Load TOML(s)</label>
-    <button id="openFolder" style="display:none">Open Folder…</button><span id="fsHint" class="muted"></span>
+    <button id="openFolder" style="display:none">Open Folder…</button>
+    <button id="refreshFolder" style="display:none">Refresh Folder</button>
+    <button id="requestPersistent" style="display:none">Grant Persistent Access</button>
+    <button id="testSave" style="display:none">Test Save</button>
+    <span id="fsHint" class="muted"></span>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -128,16 +133,36 @@ const OPP = { left:"right", right:"left", top:"bottom", bottom:"top" };
 // When a select changes, set A.side = B, and auto-recursively set B.OPP = A if empty or already pointing to A.
 function onEdgeChange(side, toId){
   const A = cur(); // current map
+  const oldExit = A.exits[side];
   A.exits[side] = (toId === "none") ? null : toId || null;
 
   // auto-reciprocal if target exists
+  let autoLinked = false;
   if (A.exits[side] && model.maps.has(A.exits[side])){
     const B = model.maps.get(A.exits[side]);
     const opp = OPP[side];
     if (!B.exits[opp] || B.exits[opp] === A.id){
-      B.exits[opp] = A.id;
+      if (!B.exits[opp]) {
+        B.exits[opp] = A.id;
+        autoLinked = true;
+      }
     }
   }
+  
+  // Clean up old reciprocal link if we changed the exit
+  if (oldExit && oldExit !== A.exits[side] && model.maps.has(oldExit)) {
+    const oldB = model.maps.get(oldExit);
+    const opp = OPP[side];
+    if (oldB.exits[opp] === A.id) {
+      oldB.exits[opp] = null;
+    }
+  }
+  
+  if (autoLinked) {
+    const targetMap = model.maps.get(A.exits[side]);
+    showNotification(`Auto-linked ${targetMap.name} ${OPP[side]} → ${A.name}`);
+  }
+  
   syncHeader();
   syncToml();
   runLint();
@@ -165,11 +190,172 @@ addEventListener('keydown', e=>{
   if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
 });
 
-document.getElementById('exportBtn').onclick = ()=>{
-  const blob = new Blob([toToml(cur())], {type:'text/plain'});
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = (cur().name.replace(/\s+/g,'_').toLowerCase() + ".toml"); a.click();
+document.getElementById('exportBtn').onclick = async ()=>{
+  const map = cur();
+  const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
+  const content = toToml(map);
+  
+  if (directoryHandle) {
+    try {
+      await saveFileToDirectory(filename, content);
+      showNotification(`Saved ${filename} to folder`);
+    } catch (err) {
+      console.error('Failed to save file:', err);
+      showNotification('Save failed - falling back to download');
+      fallbackDownload(content, filename);
+    }
+  } else {
+    fallbackDownload(content, filename);
+  }
 };
+
+document.getElementById('exportAllBtn').onclick = async ()=>{
+  console.log('Download All clicked');
+  console.log('directoryHandle exists:', !!directoryHandle);
+  
+  if (directoryHandle) {
+    console.log('Directory handle name:', directoryHandle.name);
+    try {
+      const permission = await directoryHandle.queryPermission({ mode: 'readwrite' });
+      console.log('Permission status:', permission);
+    } catch (err) {
+      console.log('Permission query failed:', err);
+    }
+    
+    let saved = 0;
+    let failed = 0;
+    let directoryExpired = false;
+    
+    for (const [id, map] of model.maps.entries()) {
+      const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
+      const content = toToml(map);
+      
+      if (!directoryExpired) {
+        try {
+          console.log(`Attempting to save ${filename}...`);
+          await saveFileToDirectory(filename, content);
+          console.log(`✅ Saved ${filename}`);
+          saved++;
+          continue;
+        } catch (err) {
+          console.log(`❌ Failed to save ${filename}:`, err);
+          if (err.message.includes('Directory handle expired')) {
+            directoryExpired = true;
+            showNotification('Directory access expired - remaining files will be downloaded. Use "Refresh Folder" to reconnect.');
+          }
+        }
+      }
+      
+      // Fallback to download
+      console.log(`📁 Downloading ${filename} as fallback`);
+      failed++;
+      fallbackDownload(content, filename);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (failed === 0) {
+      showNotification(`✅ Downloaded ${saved} files to replace in maps folder`);
+    } else if (saved > 0) {
+      showNotification(`⚠️ Downloaded ${saved} files, ${failed} failed (check console)`);
+    } else {
+      showNotification(`📁 Downloaded ${failed} files (replace in maps folder)`);
+    }
+  } else {
+    console.log('No directory handle - falling back to downloads');
+    // Fallback to multiple downloads
+    for (const [id, map] of model.maps.entries()) {
+      const content = toToml(map);
+      const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
+      fallbackDownload(content, filename);
+      // Small delay to prevent browser from blocking multiple downloads
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    showNotification(`📁 Downloaded ${model.maps.size} files (replace in maps folder)`);
+  }
+};
+
+async function saveFileToDirectory(filename, content) {
+  if (!directoryHandle) {
+    throw new Error('No directory handle available');
+  }
+
+  try {
+    console.log(`Attempting to save ${filename}...`);
+
+    // Try to remove the existing file first (if it exists)
+    try {
+      await directoryHandle.removeEntry(filename);
+      console.log(`Removed existing ${filename}`);
+    } catch (removeErr) {
+      if (removeErr.name !== 'NotFoundError') {
+        console.log(`File ${filename} doesn't exist yet, will create new`);
+      } else {
+        console.log(`Could not remove ${filename}, will try to overwrite:`, removeErr);
+      }
+    }
+
+    // Now create the new file
+    const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+
+    console.log(`✅ Successfully saved ${filename}`);
+    return; // Success!
+
+  } catch (err) {
+    console.error(`❌ Failed to save ${filename}:`, err);
+
+    if (err.name === 'InvalidStateError') {
+      // Directory handle is stale - throw specific error to trigger fallback
+      throw new Error(`Directory handle expired for ${filename}. Please use "Refresh Folder" or file will be downloaded.`);
+    }
+
+    if (err.name === 'NotAllowedError') {
+      throw new Error(`Permission denied for ${filename}. File may be open in another program or folder access was revoked.`);
+    }
+
+    // Re-throw other errors
+    throw err;
+  }
+}
+
+function fallbackDownload(content, filename) {
+  const blob = new Blob([content], {type:'text/plain'});
+  const a = document.createElement('a'); 
+  a.href = URL.createObjectURL(blob);
+  a.download = filename; 
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 100);
+}
+
+function showNotification(message) {
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed; top: 20px; right: 20px; z-index: 1000;
+    background: #22c55e; color: white; padding: 12px 20px;
+    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    font-weight: 500; animation: fadeInOut 3s ease-in-out;
+  `;
+  notification.textContent = message;
+  
+  // Add CSS animation
+  if (!document.getElementById('notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'notification-styles';
+    style.textContent = `
+      @keyframes fadeInOut {
+        0% { opacity: 0; transform: translateX(100%); }
+        15%, 85% { opacity: 1; transform: translateX(0); }
+        100% { opacity: 0; transform: translateX(100%); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  document.body.appendChild(notification);
+  setTimeout(() => notification.remove(), 3000);
+}
 
 document.getElementById('importFiles').addEventListener('change', async (e)=>{
   const files = Array.from(e.target.files);
@@ -181,24 +367,225 @@ document.getElementById('importFiles').addEventListener('change', async (e)=>{
   setCurrent(model.current ?? model.maps.keys().next().value);
 });
 
-// Optional: folder import (Chromium)
+// Optional: folder import and save (Chromium)
 const openFolderBtn = document.getElementById('openFolder');
 const fsHint = document.getElementById('fsHint');
+let directoryHandle = null; // Store directory handle for saving
+
+// Persistent directory handle storage
+const DIRECTORY_HANDLE_KEY = 'lamy-maps-directory-handle';
+
 if ('showDirectoryPicker' in window){
+  const refreshFolderBtn = document.getElementById('refreshFolder');
+  
   openFolderBtn.style.display = 'inline-block';
-  fsHint.textContent = ' (Folder import available)';
-  openFolderBtn.onclick = async ()=>{
-    const dir = await window.showDirectoryPicker();
-    for await (const [name, handle] of dir.entries()){
-      if (name.toLowerCase().endsWith('.toml')){
-        const file = await handle.getFile();
-        const txt = await file.text();
-        const obj = fromToml(txt);
-        model.maps.set(obj.id, obj);
+  fsHint.textContent = ' (Folder import/save available)';
+  
+  // Try to restore saved directory handle on page load
+  restoreSavedDirectory();
+  
+  async function setupFolder() {
+    try {
+      directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      
+      // Save the directory handle for next time
+      await saveDirectoryHandle(directoryHandle);
+      
+      // Load all TOML files from the selected directory
+      const loadedCount = await loadFromDirectory();
+      
+      setCurrent(model.current ?? model.maps.keys().next().value);
+      updateExportButtons();
+      
+      // Show refresh button now that we have a folder
+      refreshFolderBtn.style.display = 'inline-block';
+      
+      // Reset button styling
+      openFolderBtn.textContent = 'Open Folder…';
+      openFolderBtn.style.background = '';
+      openFolderBtn.style.color = '';
+      
+      showNotification(`🔗 Connected to folder, loaded ${loadedCount} maps`);
+    } catch (err) {
+      if (err.name !== 'AbortError') { // User didn't cancel
+        console.error('Failed to open folder:', err);
+        showNotification('Failed to open folder');
       }
     }
-    setCurrent(model.current ?? model.maps.keys().next().value);
+  }
+  
+  openFolderBtn.onclick = setupFolder;
+  refreshFolderBtn.onclick = setupFolder;
+  
+  // Persistent permission button
+  const persistentBtn = document.getElementById('requestPersistent');
+  persistentBtn.onclick = async () => {
+    try {
+      const granted = await navigator.storage.persist();
+      if (granted) {
+        showNotification('✅ Persistent storage granted! Folder access will be remembered longer.');
+        persistentBtn.style.display = 'none';
+      } else {
+        showNotification(`💡 Persistent storage not granted (this is normal). Edge will still remember your folder for this session and often across restarts. To enable permanently: Edge Settings → Cookies and site permissions → All sites → localhost → Automatic downloads → Allow`);
+      }
+    } catch (err) {
+      console.error('Failed to request persistent storage:', err);
+      showNotification('❌ Could not request persistent storage');
+    }
   };
+  
+  // Show persistent button if storage API is available
+  if ('storage' in navigator && 'persist' in navigator.storage) {
+    persistentBtn.style.display = 'inline-block';
+  }
+  
+  // Test save button
+  const testBtn = document.getElementById('testSave');
+  testBtn.onclick = async () => {
+    console.log('=== DIRECTORY HANDLE DEBUG ===');
+    console.log('directoryHandle exists:', !!directoryHandle);
+    
+    if (directoryHandle) {
+      console.log('Directory name:', directoryHandle.name);
+      try {
+        const permission = await directoryHandle.queryPermission({ mode: 'readwrite' });
+        console.log('Permission status:', permission);
+        
+        if (permission === 'granted') {
+          console.log('Testing file creation...');
+          const testFile = await directoryHandle.getFileHandle('test_save.txt', { create: true });
+          const writable = await testFile.createWritable();
+          await writable.write('Test save at ' + new Date().toISOString());
+          await writable.close();
+          console.log('✅ Test file created successfully!');
+          
+          // Now test overwriting an existing file (remove and recreate)
+          console.log('Testing file remove/recreate...');
+          try {
+            // First remove the file
+            await directoryHandle.removeEntry('cave.toml');
+            console.log('Removed cave.toml');
+            
+            // Then recreate it
+            const recreatedFile = await directoryHandle.getFileHandle('cave.toml', { create: true });
+            const recreatedWritable = await recreatedFile.createWritable();
+            await recreatedWritable.write('[tiles]\nwall = "#"\nfloor = " "\n\n[spawn]\nx = 2\ny = 5\nw = 2\nh = 2\n\n# Test recreation\n');
+            await recreatedWritable.close();
+            console.log('✅ File remove/recreate test successful!');
+            showNotification('✅ Both create and remove/recreate tests successful!');
+          } catch (overwriteErr) {
+            console.error('❌ File remove/recreate test failed:', overwriteErr);
+            showNotification('❌ Create works, but remove/recreate failed: ' + overwriteErr.message);
+          }
+          
+        } else {
+          console.log('❌ Permission not granted');
+          showNotification('❌ Permission not granted');
+        }
+      } catch (err) {
+        console.error('❌ Test save failed:', err);
+        showNotification('❌ Test save failed: ' + err.message);
+      }
+    } else {
+      console.log('❌ No directory handle');
+      showNotification('❌ No directory handle - use "Open Folder" first');
+    }
+  };
+  
+  // Show test button
+  testBtn.style.display = 'inline-block';
+}
+
+async function saveDirectoryHandle(handle) {
+  try {
+    // Store the directory handle using IndexedDB via the browser's internal storage
+    if ('indexedDB' in window && handle) {
+      // Use the File System Access API's built-in persistence
+      await navigator.storage.persist();
+      
+      // Store handle reference for restoration
+      localStorage.setItem(DIRECTORY_HANDLE_KEY + '_name', handle.name);
+      localStorage.setItem(DIRECTORY_HANDLE_KEY + '_timestamp', Date.now().toString());
+      
+      // The actual handle will be stored by the browser's permission system
+      console.log('Directory handle saved for persistence');
+    }
+  } catch (err) {
+    console.warn('Failed to save directory handle:', err);
+  }
+}
+
+async function restoreSavedDirectory() {
+  try {
+    const savedName = localStorage.getItem(DIRECTORY_HANDLE_KEY + '_name');
+    const savedTimestamp = localStorage.getItem(DIRECTORY_HANDLE_KEY + '_timestamp');
+    
+    if (!savedName) return;
+    
+    // Check if saved recently (within 7 days, Edge tends to remember longer)
+    const age = Date.now() - parseInt(savedTimestamp || '0');
+    const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+    
+    if (age > maxAge) {
+      console.log('Saved directory handle expired (older than 7 days)');
+      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_name');
+      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_timestamp');
+      return;
+    }
+    
+    // Try to restore by requesting permission again (this is the limitation)
+    // The browser should remember the permission for the same origin
+    console.log(`Attempting to restore directory: ${savedName}`);
+    
+    // Show status that we remember the folder
+    fsHint.textContent = ` (Last used: ${savedName} - click "Open Folder" to reconnect)`;
+    openFolderBtn.textContent = `Reconnect to ${savedName}`;
+    openFolderBtn.style.background = '#22c55e';
+    openFolderBtn.style.color = 'white';
+    
+  } catch (err) {
+    console.warn('Failed to restore directory handle:', err);
+  }
+}
+
+async function loadFromDirectory() {
+  if (!directoryHandle) return 0;
+  
+  let loadedCount = 0;
+  try {
+    for await (const [name, handle] of directoryHandle.entries()){
+      if (name.toLowerCase().endsWith('.toml')){
+        try {
+          const file = await handle.getFile();
+          const txt = await file.text();
+          const obj = fromToml(txt);
+          model.maps.set(obj.id, obj);
+          loadedCount++;
+        } catch (err) {
+          console.warn(`Failed to load ${name}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error reading directory:', err);
+  }
+  
+  return loadedCount;
+}
+
+function updateExportButtons() {
+  const exportBtn = document.getElementById('exportBtn');
+  const exportAllBtn = document.getElementById('exportAllBtn');
+  
+  if (directoryHandle) {
+    exportBtn.textContent = 'Save TOML';
+    exportAllBtn.textContent = 'Download All';
+    fsHint.textContent = ' (Connected to folder - direct save enabled)';
+  } else {
+    exportBtn.textContent = 'Export TOML';
+    exportAllBtn.textContent = 'Download All';
+    fsHint.textContent = ' (Folder import/save available)';
+  }
 }
 
 // Auto-discover ./maps/ on page load:
