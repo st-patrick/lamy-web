@@ -46,6 +46,7 @@
     <button id="refreshFolder" style="display:none">Refresh Folder</button>
     <button id="requestPersistent" style="display:none">Grant Persistent Access</button>
     <button id="testSave" style="display:none">Test Save</button>
+    <button id="clearStorage" style="display:none">Reset Cache</button>
     <span id="fsHint" class="muted"></span>
   </div>
 
@@ -100,6 +101,44 @@ const model = {
 };
 const CH = { wall:'#', floor:' ' };
 
+function makeEmptyExtras(){
+  return { meta:null, legend:null, palette:null, layers:null, triggers:[], poi:[] };
+}
+
+function cloneExtrasFromToml(t){
+  const extras = makeEmptyExtras();
+  if (t.meta && typeof t.meta === 'object') extras.meta = { ...t.meta };
+  if (t.legend && typeof t.legend === 'object') extras.legend = { ...t.legend };
+  if (t.palette && typeof t.palette === 'object') extras.palette = { ...t.palette };
+  if (t.layers && typeof t.layers === 'object'){
+    extras.layers = {};
+    for (const [layerName, layerData] of Object.entries(t.layers)){
+      if (!layerData || typeof layerData !== 'object') continue;
+      extras.layers[layerName] = {};
+      for (const [k, v] of Object.entries(layerData)){
+        extras.layers[layerName][k] = (typeof v === 'object' && v !== null)
+          ? JSON.parse(JSON.stringify(v))
+          : v;
+      }
+    }
+  }
+  if (Array.isArray(t.triggers)) extras.triggers = t.triggers.map(entry => ({ ...entry }));
+  if (Array.isArray(t.poi)) extras.poi = t.poi.map(entry => ({ ...entry }));
+  return extras;
+}
+
+function clearModel(){
+  model.maps.clear();
+  model.current = null;
+  mapsSel.innerHTML = '';
+  tomlArea.value = '';
+  warn.textContent = '';
+  warn.style.display = 'none';
+  warn.classList.remove('ok');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  console.log('[Editor] Model cleared');
+}
+
 function uuid(){
   if (crypto?.randomUUID) return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
@@ -115,7 +154,8 @@ function makeNewMap(){
     grid: Array.from({length:+hIn.value||70}, ()=>Array.from({length:+wIn.value||99}, ()=> CH.floor)),
     spawn: {x:1,y:1,w:+swIn.value||2,h:+shIn.value||2},
     exits: {left:null,right:null,top:null,bottom:null},
-    chars: {...CH}
+    chars: {...CH},
+    extras: makeEmptyExtras()
   };
   model.maps.set(id, data);
   setCurrent(id);
@@ -370,6 +410,7 @@ document.getElementById('importFiles').addEventListener('change', async (e)=>{
 // Optional: folder import and save (Chromium)
 const openFolderBtn = document.getElementById('openFolder');
 const fsHint = document.getElementById('fsHint');
+const clearStorageBtn = document.getElementById('clearStorage');
 let directoryHandle = null; // Store directory handle for saving
 
 // Persistent directory handle storage
@@ -380,6 +421,7 @@ if ('showDirectoryPicker' in window){
   
   openFolderBtn.style.display = 'inline-block';
   fsHint.textContent = ' (Folder import/save available)';
+  clearStorageBtn.style.display = 'inline-block';
   
   // Try to restore saved directory handle on page load
   restoreSavedDirectory();
@@ -391,10 +433,16 @@ if ('showDirectoryPicker' in window){
       // Save the directory handle for next time
       await saveDirectoryHandle(directoryHandle);
       
+      const previousId = model.current;
+      clearModel();
       // Load all TOML files from the selected directory
-      const loadedCount = await loadFromDirectory();
+  const loadedCount = await loadFromDirectory();
       
-      setCurrent(model.current ?? model.maps.keys().next().value);
+      const nextId = (previousId && model.maps.has(previousId))
+        ? previousId
+        : model.maps.keys().next().value;
+  if (nextId) setCurrent(nextId);
+  else model.current = null;
       updateExportButtons();
       
       // Show refresh button now that we have a folder
@@ -438,6 +486,36 @@ if ('showDirectoryPicker' in window){
   if ('storage' in navigator && 'persist' in navigator.storage) {
     persistentBtn.style.display = 'inline-block';
   }
+  
+  clearStorageBtn.onclick = async () => {
+    try {
+      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_name');
+      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_timestamp');
+      console.log('Local cache cleared: directory handle metadata removed.');
+    } catch (err) {
+      console.error('Failed to clear local storage cache:', err);
+      showNotification('❌ Could not clear cache');
+      return;
+    }
+
+    directoryHandle = null;
+    refreshFolderBtn.style.display = 'none';
+    openFolderBtn.textContent = 'Open Folder…';
+    openFolderBtn.style.background = '';
+    openFolderBtn.style.color = '';
+    fsHint.textContent = ' (Folder import/save available)';
+
+    clearModel();
+    updateExportButtons();
+
+    try {
+      await loadInitialMaps();
+      showNotification('🧹 Cache cleared — manifest reloaded');
+    } catch (err) {
+      console.error('Failed to reload manifest after cache clear:', err);
+      showNotification('🧹 Cache cleared (reload failed; check console)');
+    }
+  };
   
   // Test save button
   const testBtn = document.getElementById('testSave');
@@ -566,6 +644,7 @@ async function loadFromDirectory() {
         }
       }
     }
+    console.log('[Editor] Loaded maps from folder:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
   } catch (err) {
     console.error('Error reading directory:', err);
   }
@@ -591,7 +670,8 @@ function updateExportButtons() {
 // Auto-discover ./maps/ on page load:
 // 1) try maps/manifest.json (["maps/plains.toml", ...])
 // 2) else parse the HTML listing at maps/ (works with `npx serve`)
-window.addEventListener('DOMContentLoaded', async ()=>{
+async function loadInitialMaps(){
+  clearModel();
   let found = 0;
   const urls = new Set();
 
@@ -613,9 +693,15 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       found++;
     }catch{}
   }
-  if (found > 0) setCurrent(model.maps.keys().next().value);
-  else makeNewMap(); // fallback blank
-});
+  console.log('[Editor] Loaded maps from manifest:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
+  if (found > 0){
+    const firstId = model.maps.keys().next().value;
+    if (firstId) setCurrent(firstId);
+  }
+  if (!model.current) makeNewMap(); // fallback blank
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{ loadInitialMaps(); });
 
 
 // Painting
@@ -721,28 +807,128 @@ function draw(){
 // TOML IO — preserve whitespace and blank rows
 function toToml(m){
   const lines = m.grid.map(r => r.join("")); // keep trailing spaces by not trimming
-  return [
-    `id = "${m.id}"`,
-    `name = "${m.name.replace(/"/g,'\\"')}"`,
-    ``,
-    `[tiles]`,
-    `wall = "${m.chars.wall}"`,
-    `floor = "${m.chars.floor}"`,
-    ``,
-    `[spawn]`,
-    `x = ${m.spawn.x}`, `y = ${m.spawn.y}`, `w = ${m.spawn.w}`, `h = ${m.spawn.h}`,
-    ``,
-    `grid = """`,
-    ...lines,
-    `"""`,
-    ``,
-    `[exits]`,
-    ...(m.exits.left   ? [`left = "${m.exits.left}"`]   : []),
-    ...(m.exits.right  ? [`right = "${m.exits.right}"`] : []),
-    ...(m.exits.top    ? [`top = "${m.exits.top}"`]     : []),
-    ...(m.exits.bottom ? [`bottom = "${m.exits.bottom}"`] : []),
-    ``
-  ].join("\n");
+  const extras = m.extras ?? makeEmptyExtras();
+  const out = [];
+
+  out.push(`id = "${escapeTomlString(m.id)}"`);
+  out.push(`name = "${escapeTomlString(m.name)}"`);
+  out.push("");
+
+  out.push(`[tiles]`);
+  out.push(`wall = "${escapeTomlString(m.chars.wall)}"`);
+  out.push(`floor = "${escapeTomlString(m.chars.floor)}"`);
+  out.push("");
+
+  out.push(`[spawn]`);
+  out.push(`x = ${m.spawn.x}`);
+  out.push(`y = ${m.spawn.y}`);
+  out.push(`w = ${m.spawn.w}`);
+  out.push(`h = ${m.spawn.h}`);
+  out.push("");
+
+  if (extras.meta && Object.keys(extras.meta).length){
+    out.push(`[meta]`);
+    for (const [key, value] of Object.entries(extras.meta)){
+      const serialized = formatTomlValue(value);
+      if (serialized !== null) out.push(`${key} = ${serialized}`);
+    }
+    out.push("");
+  }
+
+  if (extras.legend && Object.keys(extras.legend).length){
+    out.push(`[legend]`);
+    for (const [key, value] of Object.entries(extras.legend)){
+      const serialized = formatTomlValue(value);
+      if (serialized !== null) out.push(`${key} = ${serialized}`);
+    }
+    out.push("");
+  }
+
+  if (extras.palette && Object.keys(extras.palette).length){
+    out.push(`[palette]`);
+    for (const [key, value] of Object.entries(extras.palette)){
+      const serialized = formatTomlValue(value);
+      if (serialized !== null) out.push(`${key} = ${serialized}`);
+    }
+    out.push("");
+  }
+
+  if (extras.poi && extras.poi.length){
+    for (const entry of extras.poi){
+      out.push(`[[poi]]`);
+      writeOrderedTable(out, entry, ["id","name","x","y","kind","notes"]);
+      out.push("");
+    }
+  }
+
+  out.push(`grid = """`);
+  out.push(...lines);
+  out.push(`"""`);
+  out.push("");
+
+  if (extras.layers && Object.keys(extras.layers).length){
+    for (const [layerName, layer] of Object.entries(extras.layers)){
+      if (!layer || typeof layer !== 'object') continue;
+      out.push(`[layers.${layerName}]`);
+      for (const [key, value] of Object.entries(layer)){
+        if (typeof value === 'string' && value.includes("\n")){
+          out.push(`${key} = """`);
+          out.push(...value.split("\n"));
+          out.push(`"""`);
+        } else {
+          const serialized = formatTomlValue(value);
+          if (serialized !== null) out.push(`${key} = ${serialized}`);
+        }
+      }
+      out.push("");
+    }
+  }
+
+  out.push(`[exits]`);
+  if (m.exits.left) out.push(`left = "${escapeTomlString(m.exits.left)}"`);
+  if (m.exits.right) out.push(`right = "${escapeTomlString(m.exits.right)}"`);
+  if (m.exits.top) out.push(`top = "${escapeTomlString(m.exits.top)}"`);
+  if (m.exits.bottom) out.push(`bottom = "${escapeTomlString(m.exits.bottom)}"`);
+  out.push("");
+
+  if (extras.triggers && extras.triggers.length){
+    for (const entry of extras.triggers){
+      out.push(`[[triggers]]`);
+      writeOrderedTable(out, entry, ["id","type","event","x","y","w","h","text"]);
+      out.push("");
+    }
+  }
+
+  while (out.length && out[out.length-1] === "") out.pop();
+  return out.join("\n") + "\n";
+}
+
+function escapeTomlString(str){
+  return String(str ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function formatTomlValue(value){
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return `"${escapeTomlString(value)}"`;
+}
+
+function writeOrderedTable(out, entry, order){
+  const seen = new Set();
+  for (const key of order){
+    if (entry[key] === undefined) continue;
+    const serialized = formatTomlValue(entry[key]);
+    if (serialized !== null){
+      out.push(`${key} = ${serialized}`);
+      seen.add(key);
+    }
+  }
+  for (const key of Object.keys(entry)){
+    if (seen.has(key)) continue;
+    const serialized = formatTomlValue(entry[key]);
+    if (serialized !== null) out.push(`${key} = ${serialized}`);
+  }
 }
 function fromToml(txt){
   const t = parseTOML(txt);
@@ -753,42 +939,136 @@ function fromToml(txt){
     const padded = line.padEnd(W, (t.tiles?.floor ?? ' '));
     return Array.from({length:W}, (_,x)=> padded[x] ?? (t.tiles?.floor ?? ' '));
   });
+  const extras = cloneExtrasFromToml(t);
   return {
     id: t.id, name: t.name || t.id.slice(0,8),
     W, H, grid,
     spawn: { x: t.spawn.x, y: t.spawn.y, w: t.spawn.w, h: t.spawn.h },
     exits: { left: t.exits?.left ?? null, right: t.exits?.right ?? null, top: t.exits?.top ?? null, bottom: t.exits?.bottom ?? null },
-    chars: { wall: t.tiles?.wall ?? '#', floor: t.tiles?.floor ?? ' ' }
+    chars: { wall: t.tiles?.wall ?? '#', floor: t.tiles?.floor ?? ' ' },
+    extras
   };
 }
 
 function parseTOML(src){
-  const out = {}; let ctx = out, inML=false, mlKey="", mlBuf=[], mlTarget=out;
-  const isRootKey = k => (k === "id" || k === "name" || k === "grid");
-  const set=(obj,k,v)=>obj[k]=v;
-  const lines = src.replace(/\r\n?/g,"\n").split("\n");
+  const out = {};
+  let ctx = out;
+  let path = [];
+  let inML = false, mlKey = "", mlBuf = [], mlTarget = out;
 
+  const isRootKey = k => (k === "id" || k === "name" || k === "grid");
+  const set = (obj, key, val) => { obj[key] = val; };
+
+  const shouldForceRoot = (key, path) => {
+    if (!isRootKey(key)) return false;
+    if (key === "grid"){
+      if (path.length === 0) return true;
+      if (path.length === 1 && path[0] !== "layers") return true;
+      return false;
+    }
+    return path.length === 0;
+  };
+
+  const ensureTable = (segments) => {
+    let target = out;
+    for (const seg of segments){
+      target[seg] ||= {};
+      if (typeof target[seg] !== "object" || Array.isArray(target[seg])){
+        throw new Error(`TOML: attempted to reuse key '${segments.join('.')}' as non-table.`);
+      }
+      target = target[seg];
+    }
+    return target;
+  };
+
+  const ensureArrayTable = (segments) => {
+    const head = segments.slice(0, -1);
+    const leaf = segments[segments.length - 1];
+    let target = out;
+    for (const seg of head){
+      target[seg] ||= {};
+      if (typeof target[seg] !== "object" || Array.isArray(target[seg])){
+        throw new Error(`TOML: attempted to reuse key '${segments.join('.')}' as non-table.`);
+      }
+      target = target[seg];
+    }
+    target[leaf] ||= [];
+    if (!Array.isArray(target[leaf])){
+      throw new Error(`TOML: key '${segments.join('.')}' already used as non-array.`);
+    }
+    const obj = {};
+    target[leaf].push(obj);
+    return obj;
+  };
+
+  const lines = src.replace(/\r\n?/g,"\n").split("\n");
   for (let raw of lines){
     const line = raw.trim();
+
     if (!inML){
       if (!line || line.startsWith("#")) continue;
+
       let m;
-      if ((m=line.match(/^\[([A-Za-z0-9_]+)\]$/))){ const k=m[1]; out[k]??={}; ctx=out[k]; continue; }
-      if ((m=line.match(/^([A-Za-z0-9_]+)\s*=\s*"""$/))){ 
-        const key=m[1]; inML=true; mlKey=key; mlBuf=[]; mlTarget=isRootKey(key)?out:ctx; continue; 
-      }
-      if ((m=line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/))){
-        const key=m[1]; let rhs=m[2].trim(); let val;
-        if ((/^".*"$/.test(rhs)) || (/^'.*'$/.test(rhs))) val=rhs.slice(1,-1);
-        else if (/^(true|false)$/i.test(rhs)) val=/^true$/i.test(rhs);
-        else if (/^-?\d+$/.test(rhs)) val=parseInt(rhs,10);
-        else /* unknown -> ignore */ val = undefined;
-        if (val !== undefined) set(isRootKey(key)?out:ctx, key, val);
+      if ((m = line.match(/^\[\[([A-Za-z0-9_.]+)\]\]$/))){
+        const segments = m[1].split('.');
+        ctx = ensureArrayTable(segments);
+        path = [segments[0]];
         continue;
       }
+
+      if ((m = line.match(/^\[([A-Za-z0-9_.]+)\]$/))){
+        const segments = m[1].split('.');
+        ctx = ensureTable(segments);
+        path = segments;
+        continue;
+      }
+
+      if ((m = line.match(/^([A-Za-z0-9_]+)\s*=\s*"""$/))){
+        const key = m[1];
+        inML = true;
+        mlKey = key;
+        mlBuf = [];
+        const forceRoot = shouldForceRoot(key, path);
+        mlTarget = forceRoot ? out : ctx;
+        if (forceRoot){ ctx = out; path = []; }
+        continue;
+      }
+
+      if ((m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/))){
+        const key = m[1];
+        let rhs = m[2].trim();
+        let val;
+        if ((/^".*"$/.test(rhs)) || (/^'.*'$/.test(rhs))){
+          val = rhs.slice(1, -1)
+            .replace(/\\\\/g, "\\")
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, "\n")
+            .replace(/\\r/g, "\r")
+            .replace(/\\t/g, "\t");
+        } else if (/^(true|false)$/i.test(rhs)){
+          val = /^true$/i.test(rhs);
+        } else if (/^-?\d+$/.test(rhs)){
+          val = parseInt(rhs, 10);
+        } else if (/^-?\d*\.\d+$/.test(rhs)){
+          val = parseFloat(rhs);
+        } else {
+          throw new Error("Unsupported TOML value: " + rhs);
+        }
+        const forceRoot = shouldForceRoot(key, path);
+        const target = forceRoot ? out : ctx;
+        set(target, key, val);
+        if (forceRoot){ ctx = out; path = []; }
+        continue;
+      }
+
+      // Unknown line -> ignore
     } else {
-      if (line === `"""`){ set(mlTarget, mlKey, mlBuf.join("\n")); inML=false; mlKey=""; mlBuf=[]; mlTarget=out; }
-      else mlBuf.push(raw);
+      if (line === `"""`){
+        set(mlTarget, mlKey, mlBuf.join("\n"));
+        inML = false; mlKey = ""; mlBuf = []; mlTarget = out;
+      } else {
+        mlBuf.push(raw);
+      }
     }
   }
   if (inML) throw new Error("Unterminated multiline string");

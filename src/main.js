@@ -5,7 +5,16 @@ import { createRenderer } from "./view/render.js";
 import { loadAtlasFromTomls } from "./world/atlas.js";
 import { rectIsClear } from "./world/level.js";
 
-const MAP_FILES = ["./maps/plains.toml","./maps/cave.toml","./maps/town_square.toml", "maps/map_4.toml"];
+const DEFAULT_MAP_FILES = [
+  "maps/aster_-_old_town.toml",
+  "maps/harbor_of_aster.toml",
+  "maps/east_farmlands.toml",
+  "maps/whispering_woods.toml",
+  "maps/moonlit_ruins.toml",
+  "maps/north_road.toml",
+  "maps/crystal_cavern.toml",
+  "maps/clifftop_shrine.toml"
+];
 
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
 
@@ -19,7 +28,8 @@ const fullBtn = document.getElementById("full");
 boot();
 
 async function boot(){
-  atlas = await loadAtlasFromTomls(MAP_FILES);
+  const files = await loadManifestList();
+  atlas = await loadAtlasFromTomls(files);
   currentId = Object.keys(atlas)[0];
   level = atlas[currentId].level;
 
@@ -46,6 +56,18 @@ async function boot(){
     if (e.key === "0") fitToWindowHeight();
     if (e.key.toLowerCase() === "f") toggleFullscreen();
   });
+}
+
+async function loadManifestList(){
+  try {
+    const res = await fetch("maps/manifest.json");
+    if (!res.ok) throw new Error(res.statusText);
+    const list = await res.json();
+    if (Array.isArray(list) && list.length) return list;
+  } catch (err) {
+    console.warn("Using default map list (manifest load failed)", err);
+  }
+  return DEFAULT_MAP_FILES;
 }
 
 function update(dt){
