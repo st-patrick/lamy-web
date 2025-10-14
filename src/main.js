@@ -5,20 +5,10 @@ import { createRenderer } from "./view/render.js";
 import { loadAtlasFromTomls } from "./world/atlas.js";
 import { rectIsClear } from "./world/level.js";
 
-const DEFAULT_MAP_FILES = [
-  "maps/aster_-_old_town.toml",
-  "maps/harbor_of_aster.toml",
-  "maps/east_farmlands.toml",
-  "maps/whispering_woods.toml",
-  "maps/moonlit_ruins.toml",
-  "maps/north_road.toml",
-  "maps/crystal_cavern.toml",
-  "maps/clifftop_shrine.toml"
-];
-
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
 
 const canvas = document.getElementById("game");
+const bootStatus = document.getElementById("bootStatus");
 const fitBtn = document.getElementById("fit");
 const zoomInBtn = document.getElementById("zoomIn");
 const zoomOutBtn = document.getElementById("zoomOut");
@@ -28,10 +18,33 @@ const fullBtn = document.getElementById("full");
 boot();
 
 async function boot(){
-  const files = await loadManifestList();
-  atlas = await loadAtlasFromTomls(files);
-  currentId = Object.keys(atlas)[0];
+  const manifest = await loadManifestList();
+  if (!manifest || !manifest.files.length){
+    reportBootIssue("No map manifest available; unable to start game loop.");
+    return;
+  }
+
+  atlas = await loadAtlasFromTomls(manifest.files);
+  const ids = Object.keys(atlas);
+  if (!ids.length){
+    reportBootIssue("Manifest loaded, but no maps could be parsed.");
+    return;
+  }
+
+  const fromId = manifest.defaultId && atlas[manifest.defaultId] ? manifest.defaultId : null;
+  let fromFile = null;
+  if (manifest.defaultFile){
+    const normalized = cleanManifestPath(manifest.defaultFile);
+    fromFile = ids.find(id => {
+      const file = cleanManifestPath(atlas[id].file);
+      return file === normalized;
+    }) || null;
+  }
+
+  currentId = fromId || fromFile || ids[0];
   level = atlas[currentId].level;
+
+  reportBootIssue("");
 
   if (!rectIsClear(level, level.spawn.x, level.spawn.y, level.spawn.w, level.spawn.h)){
     console.warn(`[Level ${level.name}] Spawn overlaps solids — fix in editor.`);
@@ -58,16 +71,56 @@ async function boot(){
   });
 }
 
+function normalizeManifest(raw){
+  if (!raw) return null;
+  if (Array.isArray(raw)){
+    return {
+      files: raw.filter(v => typeof v === "string").map(cleanManifestPath),
+      defaultFile: cleanManifestPath(raw.find(v => typeof v === "string") || null),
+      defaultId: null
+    };
+  }
+  if (typeof raw === "object"){
+    const files = Array.isArray(raw.files) ? raw.files.filter(v => typeof v === "string").map(cleanManifestPath)
+      : Array.isArray(raw.maps) ? raw.maps.filter(v => typeof v === "string").map(cleanManifestPath) : [];
+    let defaultFile = null;
+    if (typeof raw.defaultFile === "string") defaultFile = cleanManifestPath(raw.defaultFile);
+    else if (raw.default && typeof raw.default === "string") defaultFile = cleanManifestPath(raw.default);
+    else if (raw.default && typeof raw.default.file === "string") defaultFile = cleanManifestPath(raw.default.file);
+    let defaultId = null;
+    if (typeof raw.defaultId === "string") defaultId = raw.defaultId;
+    else if (raw.default && typeof raw.default.id === "string") defaultId = raw.default.id;
+    return { files, defaultFile, defaultId };
+  }
+  return null;
+}
+
+function cleanManifestPath(path){
+  if (!path) return path;
+  return path.replace(/^\.\/?/, "").replace(/\\/g, "/");
+}
+
 async function loadManifestList(){
   try {
     const res = await fetch("maps/manifest.json");
     if (!res.ok) throw new Error(res.statusText);
-    const list = await res.json();
-    if (Array.isArray(list) && list.length) return list;
+    const manifest = normalizeManifest(await res.json());
+    if (manifest && manifest.files.length) return manifest;
   } catch (err) {
-    console.warn("Using default map list (manifest load failed)", err);
+    console.warn("Failed to load map manifest", err);
   }
-  return DEFAULT_MAP_FILES;
+  return { files: [], defaultFile: null, defaultId: null };
+}
+
+function reportBootIssue(message){
+  if (!bootStatus) return;
+  if (message){
+    bootStatus.textContent = message;
+    bootStatus.style.display = "block";
+  } else {
+    bootStatus.textContent = "";
+    bootStatus.style.display = "none";
+  }
 }
 
 function update(dt){

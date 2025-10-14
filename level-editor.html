@@ -16,11 +16,18 @@
   #cv{background:var(--floor);image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1);touch-action:none}
   .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none;white-space:pre-line}
   .ok{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
-  #world{width:100%;height:44vh;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab}
+  #world{width:100%;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab;display:block}
   #world:active{cursor:grabbing}
   .edge{display:flex;gap:6px;align-items:center}
   select.bad{border-color:#ef4444; background:#fee2e2;}
   .muted{color:#6b7280}
+  #workspace{padding:12px;display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;box-sizing:border-box}
+  #workspace > section{flex:1 1 480px;min-width:320px;display:flex;flex-direction:column;gap:12px}
+  #mapPanel{flex:1.5 1 560px}
+  #worldPanel{flex:1 1 420px}
+  #mapPanel canvas,#worldPanel canvas{width:100%;height:auto;display:block}
+  #worldPanel{display:flex;flex-direction:column}
+  #worldPanel .row{justify-content:space-between}
 </style>
 
 <header>
@@ -37,9 +44,10 @@
     <span class="tool" id="paintErase" title="2">Erase ( )</span>
     <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
-    <select id="maps"></select>
-    <button id="saveMaps">Save Maps…</button>
-    <button id="reloadMaps">Reload Maps</button>
+  <select id="maps"></select>
+  <button id="makeDefault">Set Default Start</button>
+  <button id="saveMaps">Save Maps…</button>
+  <button id="reloadMaps">Reload Maps</button>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -52,10 +60,12 @@
   <div id="warn" class="banner"></div>
 </header>
 
-<main style="padding:12px;display:grid;gap:12px">
-  <canvas id="cv" width="960" height="540"></canvas>
+<main id="workspace">
+  <section id="mapPanel">
+    <canvas id="cv" width="960" height="540"></canvas>
+  </section>
 
-  <section>
+  <section id="worldPanel">
     <div class="row"><button id="renderWorld">World Overview</button>
       <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="1"></label>
     </div>
@@ -72,6 +82,7 @@ const swIn = document.getElementById('sw'), shIn = document.getElementById('sh')
 const warn = document.getElementById('warn');
 const saveMapsBtn = document.getElementById('saveMaps');
 const reloadMapsBtn = document.getElementById('reloadMaps');
+const setDefaultBtn = document.getElementById('makeDefault');
 let currentToml = '';
 
 const edgeSel = {
@@ -86,7 +97,10 @@ let tool = 'wall';
 
 const model = {
   maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
-  current: null
+  current: null,
+  defaultId: null,
+  defaultSource: null,
+  manifestFiles: []
 };
 const CH = { wall:'#', floor:' ' };
 const staleFolderEntries = new Set();
@@ -169,6 +183,11 @@ function backgroundPalette(map){
 function clearModel(){
   model.maps.clear();
   model.current = null;
+  model.defaultId = null;
+  model.defaultSource = null;
+  model.manifestFiles = [];
+  staleFolderEntries.clear();
+  atlasInitialized = false;
   mapsSel.innerHTML = '';
   warn.textContent = '';
   warn.style.display = 'none';
@@ -198,12 +217,22 @@ function makeNewMap(){
     source: null
   };
   model.maps.set(id, data);
+  if (!model.defaultId){
+    model.defaultId = id;
+    model.defaultSource = data.source;
+  }
   setCurrent(id);
 }
 function setCurrent(id){
   model.current = id;
+  if (!model.defaultId || !model.maps.has(model.defaultId)){
+    model.defaultId = id;
+    const currentMap = model.maps.get(id);
+    model.defaultSource = currentMap?.source ?? model.defaultSource;
+  }
   syncHeader();
   fit(); draw(); syncToml(); runLint();
+  drawWorld();
 }
 function cur(){ return model.maps.get(model.current); }
 
@@ -263,6 +292,16 @@ for (const side of ["left","right","top","bottom"]){
   edgeSel[side].onchange = e => onEdgeChange(side, e.target.value);
 }
 
+if (setDefaultBtn) setDefaultBtn.onclick = ()=>{
+  const m = cur();
+  if (!m) return;
+  model.defaultId = m.id;
+  model.defaultSource = m.source ?? null;
+  showNotification(`${m.name} will load first when the game boots.`);
+  syncHeader();
+  drawWorld();
+};
+
 // Keyboard shortcuts: 1=wall, 2=erase, 3 or P=spawn
 addEventListener('keydown', e=>{
   if (e.key === '1') setTool('wall');
@@ -318,6 +357,38 @@ function fallbackDownload(content, filename) {
   a.download = filename; 
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 100);
+}
+
+async function persistManifest(handle, filenames){
+  const files = filenames.map(name => `maps/${name}`);
+  const payload = { files };
+
+  const defaultMap = (model.defaultId && model.maps.get(model.defaultId)) || null;
+  if (defaultMap){
+    const file = `maps/${defaultMap.filename}`;
+    const info = { id: defaultMap.id, file };
+    payload.default = info;
+    payload.defaultId = info.id;
+    payload.defaultFile = info.file;
+    model.defaultSource = info.file;
+  }
+
+  model.manifestFiles = files;
+  const content = JSON.stringify(payload, null, 2) + '\n';
+
+  if (!handle){
+    fallbackDownload(content, 'manifest.json');
+    return 'downloaded';
+  }
+
+  try {
+    await saveFileToDirectory(handle, 'manifest.json', content);
+    return 'saved';
+  } catch (err) {
+    console.error('Failed to save manifest:', err);
+    fallbackDownload(content, 'manifest.json');
+    return 'downloaded';
+  }
 }
 
 function showNotification(message) {
@@ -398,6 +469,7 @@ async function handleSaveMapsClick(){
   let saved = 0;
   let failed = 0;
   let expired = false;
+  const manifestPaths = [];
 
   if (handle && staleFolderEntries.size){
     for (const name of Array.from(staleFolderEntries)){
@@ -414,12 +486,13 @@ async function handleSaveMapsClick(){
   for (const map of model.maps.values()){
     const filename = ensureFilename(map, usedNames);
     const content = toToml(map);
+    manifestPaths.push(filename);
 
     if (!fallbackOnly && !expired){
       try {
-  await saveFileToDirectory(handle, filename, content);
-  map.filename = filename;
-  map.source = `folder:${filename}`;
+        await saveFileToDirectory(handle, filename, content);
+        map.filename = filename;
+        map.source = `maps/${filename}`;
         saved++;
         continue;
       } catch (err) {
@@ -441,11 +514,23 @@ async function handleSaveMapsClick(){
     await new Promise(r => setTimeout(r, 75));
   }
 
-  if (!fallbackOnly && !expired && failed === 0){
-    showNotification(`Saved ${saved} map${saved===1?'':'s'} to folder.`);
+  const manifestStatus = await persistManifest(!fallbackOnly && !expired ? handle : null, manifestPaths);
+
+  if (!fallbackOnly && !expired && failed === 0 && manifestStatus === 'saved'){
+    showNotification(`Saved ${saved} map${saved===1?'':'s'} and manifest to folder.`);
   } else {
     const total = model.maps.size;
-    showNotification(`Downloaded ${total - saved} of ${total} maps — replace them in your folder.`);
+    const mapsDownloaded = Math.max(0, total - saved);
+    const manifestDownloaded = manifestStatus !== 'saved';
+    let msg = '';
+    if (mapsDownloaded > 0){
+      msg = `Downloaded ${mapsDownloaded} of ${total} maps`;
+    }
+    if (manifestDownloaded){
+      msg += msg ? ' plus manifest.json' : 'Downloaded manifest.json';
+    }
+    if (!msg) msg = 'Download complete';
+    showNotification(`${msg} — replace them in your folder.`);
   }
 }
 
@@ -475,9 +560,21 @@ async function handleReloadMapsClick(){
 async function loadFromDirectory(handle = directoryHandle) {
   if (!handle) return 0;
 
+  atlasInitialized = false;
+
   const entries = [];
+  let manifestInfo = null;
   try {
     for await (const [name, entry] of handle.entries()){
+      if (name.toLowerCase() === 'manifest.json'){
+        try {
+          const manifestFile = await entry.getFile();
+          manifestInfo = normalizeManifest(JSON.parse(await manifestFile.text()));
+        } catch (err) {
+          console.warn('Failed to read manifest.json from folder:', err);
+        }
+        continue;
+      }
       if (!name.toLowerCase().endsWith('.toml')) continue;
       const isFile = entry.kind ? entry.kind === 'file' : typeof entry.getFile === 'function';
       if (isFile) entries.push({ name, entry });
@@ -485,6 +582,12 @@ async function loadFromDirectory(handle = directoryHandle) {
   } catch (err) {
     console.error('Error enumerating directory:', err);
     return 0;
+  }
+
+  if (manifestInfo){
+    model.defaultSource = manifestInfo.defaultFile ?? null;
+    model.defaultId = manifestInfo.defaultId ?? null;
+    model.manifestFiles = manifestInfo.files;
   }
 
   const byId = new Map();
@@ -497,7 +600,11 @@ async function loadFromDirectory(handle = directoryHandle) {
       const txt = await file.text();
       const obj = fromToml(txt, { filename: name });
       if (!obj.filename) obj.filename = name;
-      obj.source = `folder:${name}`;
+      obj.source = `maps/${name}`;
+      if (manifestInfo){
+        if (manifestInfo.defaultId && manifestInfo.defaultId === obj.id) model.defaultId = obj.id;
+        if (!model.defaultId && manifestInfo.defaultFile && manifestInfo.defaultFile === obj.source) model.defaultId = obj.id;
+      }
       const stamp = file.lastModified ?? 0;
       const existing = byId.get(obj.id);
       if (existing){
@@ -516,9 +623,21 @@ async function loadFromDirectory(handle = directoryHandle) {
     }
   }
 
-  for (const { map } of byId.values()){
+  const ordered = Array.from(byId.values());
+  if (manifestInfo){
+    const index = new Map();
+    manifestInfo.files.forEach((file, idx) => index.set(file, idx));
+    ordered.sort((a, b)=>{
+      const ai = index.has(a.map.source) ? index.get(a.map.source) : Number.MAX_SAFE_INTEGER;
+      const bi = index.has(b.map.source) ? index.get(b.map.source) : Number.MAX_SAFE_INTEGER;
+      return ai - bi;
+    });
+  }
+  for (const { map } of ordered){
     model.maps.set(map.id, map);
   }
+
+  resolveDefaultAfterLoad();
 
   if (duplicates > 0){
     console.warn(`[Editor] ${duplicates} duplicate map file(s) detected by id; keeping the newest copy per id.`, duplicateNames);
@@ -526,7 +645,58 @@ async function loadFromDirectory(handle = directoryHandle) {
   }
 
   console.log('[Editor] Loaded maps from folder:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
+  drawWorld();
   return byId.size;
+}
+
+function normalizeManifest(raw){
+  if (!raw) return null;
+  if (Array.isArray(raw)){
+    return {
+      files: raw.filter(v => typeof v === 'string').map(cleanManifestPath),
+      defaultFile: cleanManifestPath(raw.find(v => typeof v === 'string') || null),
+      defaultId: null
+    };
+  }
+  if (typeof raw === 'object'){
+    const files = Array.isArray(raw.files) ? raw.files.filter(v => typeof v === 'string').map(cleanManifestPath)
+      : Array.isArray(raw.maps) ? raw.maps.filter(v => typeof v === 'string').map(cleanManifestPath) : [];
+    let defaultFile = null;
+    if (typeof raw.defaultFile === 'string') defaultFile = cleanManifestPath(raw.defaultFile);
+    else if (raw.default && typeof raw.default === 'string') defaultFile = cleanManifestPath(raw.default);
+    else if (raw.default && typeof raw.default.file === 'string') defaultFile = cleanManifestPath(raw.default.file);
+    let defaultId = null;
+    if (typeof raw.defaultId === 'string') defaultId = raw.defaultId;
+    else if (raw.default && typeof raw.default.id === 'string') defaultId = raw.default.id;
+    return { files, defaultFile, defaultId };
+  }
+  return null;
+}
+
+function cleanManifestPath(path){
+  if (!path) return path;
+  return path.replace(/^\.\/?/, '').replace(/\\/g,'/');
+}
+
+function resolveDefaultAfterLoad(){
+  if (model.defaultId && model.maps.has(model.defaultId)){
+    model.defaultSource = model.maps.get(model.defaultId)?.source ?? model.defaultSource;
+    return;
+  }
+  if (model.defaultSource){
+    for (const map of model.maps.values()){
+      if (map.source === model.defaultSource){
+        model.defaultId = map.id;
+        model.defaultSource = map.source;
+        return;
+      }
+    }
+  }
+  const first = model.maps.keys().next().value;
+  if (first){
+    model.defaultId = first;
+    model.defaultSource = model.maps.get(first)?.source ?? model.defaultSource;
+  }
 }
 
 // Auto-discover ./maps/ on page load:
@@ -534,15 +704,23 @@ async function loadFromDirectory(handle = directoryHandle) {
 // 2) else parse the HTML listing at maps/ (works with `npx serve`)
 async function loadInitialMaps(){
   clearModel();
+  atlasInitialized = false;
   let found = 0;
   const urls = new Set();
+  let manifestInfo = null;
 
   // (1) manifest
   try {
     const r = await fetch('maps/manifest.json');
     if (r.ok){
-      const list = await r.json();
-      for (const u of list) urls.add(u);
+      const parsed = normalizeManifest(await r.json());
+      if (parsed){
+        manifestInfo = parsed;
+        for (const u of parsed.files) urls.add(u);
+        model.defaultSource = parsed.defaultFile ?? null;
+        model.defaultId = parsed.defaultId ?? null;
+        model.manifestFiles = parsed.files;
+      }
     }
   } catch {}
 
@@ -553,17 +731,24 @@ async function loadInitialMaps(){
       const base = url.split('/').pop() || null;
       const obj = fromToml(txt, { filename: base, source: url });
       if (!obj.filename) obj.filename = base;
-      if (!obj.source) obj.source = url;
+      obj.source = `maps/${obj.filename}`;
+      if (manifestInfo){
+        if (manifestInfo.defaultId && manifestInfo.defaultId === obj.id) model.defaultId = obj.id;
+        if (!model.defaultId && manifestInfo.defaultFile && manifestInfo.defaultFile === obj.source) model.defaultId = obj.id;
+      }
       model.maps.set(obj.id, obj);
       found++;
     }catch{}
   }
+  resolveDefaultAfterLoad();
   console.log('[Editor] Loaded maps from manifest:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
   if (found > 0){
-    const firstId = model.maps.keys().next().value;
-    if (firstId) setCurrent(firstId);
+    const target = (model.current && model.maps.has(model.current)) ? model.current : model.defaultId;
+    if (target) setCurrent(target);
   }
   if (!model.current) makeNewMap(); // fallback blank
+
+  drawWorld();
 }
 
 window.addEventListener('DOMContentLoaded', ()=>{ loadInitialMaps(); });
@@ -611,14 +796,22 @@ function validateSpawn(){
 // Header / selects
 function syncHeader(){
   const m = cur();
+  if (!m) return;
   nameIn.value = m.name;
   wIn.value = m.W; hIn.value = m.H; swIn.value = m.spawn.w; shIn.value = m.spawn.h;
 
   mapsSel.innerHTML = '';
   for (const [id, map] of model.maps.entries()){
-    const o = document.createElement('option'); o.value=id; o.textContent=`${map.name} (${id.slice(0,8)})`;
-    if (id===model.current) o.selected = true; mapsSel.appendChild(o);
+    const isDefault = id === model.defaultId;
+    const o = document.createElement('option');
+    o.value = id;
+  const suffix = isDefault ? ` (default · ${id.slice(0,8)})` : ` (${id.slice(0,8)})`;
+    o.textContent = `${map.name}${suffix}`;
+    if (id===model.current) o.selected = true;
+    mapsSel.appendChild(o);
   }
+  if (setDefaultBtn) setDefaultBtn.disabled = (m.id === model.defaultId);
+
   const opts = [['none','— None —'], ...Array.from(model.maps.entries()).map(([id,m])=>[id, m.name])];
   for (const side of ["left","right","top","bottom"]){
     const sel = edgeSel[side];
@@ -639,10 +832,12 @@ function syncToml(){
 
 // Render map
 function fit(){
-  const maxW = Math.min(innerWidth - 24, 1200);
+  const host = cv.parentElement;
+  const hostWidth = host?.clientWidth || cv.getBoundingClientRect().width || innerWidth - 24;
+  const maxW = Math.min(hostWidth, 1400);
   const aspect = cur().W / cur().H;
   let cw = maxW, ch = Math.round(cw / aspect);
-  const maxH = innerHeight * 0.55;
+  const maxH = Math.max(320, innerHeight * 0.6);
   if (ch > maxH){ ch = Math.round(maxH); cw = Math.round(ch * aspect); }
   cv.width = cw; cv.height = ch;
 }
@@ -1007,12 +1202,16 @@ function short(id){
 // World overview
 // World overview — clickable atlas
 const worldCv = document.getElementById('world'), wctx = worldCv.getContext('2d');
-let Z=1, pan={x:20,y:20}, dragging=false, last={x:0,y:0};
+const zoomInput = document.getElementById('z');
+let Z=0.6, pan={x:60,y:60}, dragging=false, last={x:0,y:0}, atlasInitialized=false;
 let worldRects = []; // [{id,x,y,w,h}] in world coords (pre-translate/scale)
 let hoverId = null;
 
 document.getElementById('renderWorld').onclick = drawWorld;
-document.getElementById('z').oninput = e => { Z=+e.target.value; drawWorld(); };
+if (zoomInput){
+  zoomInput.value = String(Z);
+  zoomInput.oninput = e => { Z=+e.target.value; drawWorld(); };
+}
 
 worldCv.addEventListener('pointerdown', e=>{
   const pt = worldPoint(e);
@@ -1041,7 +1240,11 @@ addEventListener('pointermove', e=>{
 function layout(){
   const pos = new Map(), q = [];
   const DIR = { left:{x:-1,y:0}, right:{x:1,y:0}, top:{x:0,y:-1}, bottom:{x:0,y:1} };
-  const start = model.current ?? Array.from(model.maps.keys())[0];
+  let start = null;
+  if (model.defaultId && model.maps.has(model.defaultId)) start = model.defaultId;
+  else if (model.current && model.maps.has(model.current)) start = model.current;
+  else start = Array.from(model.maps.keys())[0];
+  if (start && (!model.defaultId || !model.maps.has(model.defaultId))) model.defaultId = start;
   if (!start) return pos;
   pos.set(start, {x:0,y:0}); q.push(start);
   while(q.length){
@@ -1132,9 +1335,33 @@ function drawWorld(){
   }
 
   wctx.restore();
+
+  if (!atlasInitialized && worldRects.length){
+    atlasInitialized = true;
+    const bounds = worldRects.reduce((acc, r)=>{
+      const minX = Math.min(acc.minX, r.x);
+      const minY = Math.min(acc.minY, r.y);
+      const maxX = Math.max(acc.maxX, r.x + r.w);
+      const maxY = Math.max(acc.maxY, r.y + r.h);
+      return { minX, minY, maxX, maxY };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    const contentW = bounds.maxX - bounds.minX;
+    const contentH = bounds.maxY - bounds.minY;
+    pan.x = (worldCv.width/2) - ((bounds.minX + contentW/2) * Z);
+    pan.y = (worldCv.height/2) - ((bounds.minY + contentH/2) * Z);
+    requestAnimationFrame(drawWorld);
+  }
 }
 
-function resizeWorld(){ worldCv.width = innerWidth - 24; worldCv.height = Math.round(innerHeight * 0.44); }
+function resizeWorld(){
+  const host = worldCv.parentElement;
+  const width = Math.max(320, Math.floor((host?.clientWidth ?? (innerWidth * 0.4)) - 4));
+  const desired = Math.round(width * 0.75);
+  const maxHeight = Math.max(240, Math.floor(window.innerHeight * 0.7));
+  const height = Math.min(maxHeight, Math.max(240, desired));
+  worldCv.width = Math.round(width);
+  worldCv.height = height;
+}
 
 function worldPoint(e){
   const r = worldCv.getBoundingClientRect();
