@@ -12,6 +12,13 @@ export function parseTomlLevel(tomlText){
     floor: (t.tiles?.floor ?? " ")
   };
 
+  const palette = {};
+  if (t.palette && typeof t.palette === "object"){
+    for (const [k, v] of Object.entries(t.palette)){
+      if (typeof v === "string" && k.length === 1) palette[k] = v;
+    }
+  }
+
   // Preserve empty lines and trailing spaces (no trim!)
   const rows = String(must(t.grid, "grid")).replace(/\r\n?/g, "\n").split("\n");
   const h = rows.length, w = Math.max(...rows.map(r => r.length));
@@ -21,6 +28,17 @@ export function parseTomlLevel(tomlText){
     const padded = line.padEnd(w, chars.floor);
     return Array.from({length:w}, (_,x)=> padded[x] ?? chars.floor);
   });
+
+  let background = null;
+  const bgRaw = t.layers?.background?.grid;
+  if (typeof bgRaw === "string"){
+    const bgLines = bgRaw.replace(/\r\n?/g, "\n").split("\n");
+    background = Array.from({length:h}, (_,y)=>{
+      const line = bgLines[y] ?? "";
+      const padded = line.padEnd(w, " ");
+      return Array.from({length:w}, (_,x)=> padded[x] ?? " ");
+    });
+  }
 
   const spawn = {
     x: must(t.spawn?.x, "spawn.x"),
@@ -40,7 +58,7 @@ export function parseTomlLevel(tomlText){
   const isSolid = c => SOLID.has(c);
   const at = (x,y) => grid[y]?.[x] ?? chars.wall; // OOB acts as wall
 
-  return { id, name, w, h, grid, chars, spawn, exits, isSolid, at };
+  return { id, name, w, h, grid, chars, spawn, exits, palette, background, isSolid, at };
 }
 
 export function rectIsClear(level, x, y, w, h){

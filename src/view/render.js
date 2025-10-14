@@ -14,6 +14,21 @@ export function createRenderer(canvas, level, palette = {wall:"#000", floor:"#ff
     ctx.fillStyle = palette.floor;
     ctx.fillRect(0,0,canvas.width,canvas.height);
 
+    const bgGrid = level.background;
+    const bgPalette = level.palette ?? {};
+    if (bgGrid){
+      for (let y=0; y<level.h; y++){
+        for (let x=0; x<level.w; x++){
+          const code = bgGrid[y]?.[x];
+          const color = (code && bgPalette[code]) ? bgPalette[code] : null;
+          if (color){
+            ctx.fillStyle = color;
+            ctx.fillRect(x*s, y*s, s, s);
+          }
+        }
+      }
+    }
+
     for (let y=0; y<level.h; y++){
       for (let x=0; x<level.w; x++){
         if (level.grid[y][x] === level.chars.wall){

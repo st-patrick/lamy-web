@@ -127,6 +127,31 @@ function cloneExtrasFromToml(t){
   return extras;
 }
 
+function backgroundGrid(map){
+  const raw = map?.extras?.layers?.background?.grid;
+  if (typeof raw !== 'string') return null;
+  const key = `${map.W}x${map.H}:${raw.length}`;
+  if (!map._bgCache || map._bgCache.key !== key || map._bgCache.raw !== raw){
+    const lines = raw.replace(/\r\n?/g,"\n").split("\n");
+    const grid = Array.from({length:map.H}, (_,y)=>{
+      const line = lines[y] ?? "";
+      const padded = line.padEnd(map.W, ' ');
+      return Array.from({length:map.W}, (_,x)=> padded[x] ?? ' ');
+    });
+    map._bgCache = { key, raw, grid };
+  }
+  return map._bgCache.grid;
+}
+
+function backgroundPalette(map){
+  const palette = map?.extras?.palette;
+  if (!palette || typeof palette !== 'object') return null;
+  if (!map._paletteCache || map._paletteCache.source !== palette){
+    map._paletteCache = { source: palette, entries: { ...palette } };
+  }
+  return map._paletteCache.entries;
+}
+
 function clearModel(){
   model.maps.clear();
   model.current = null;
@@ -783,7 +808,21 @@ function draw(){
   const m = cur();
   const tw = cv.width / m.W, th = cv.height / m.H;
 
-  ctx.fillStyle = getCSS('--floor','#fff'); ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle = getCSS('--floor','#fff');
+  ctx.fillRect(0,0,cv.width,cv.height);
+
+  const bg = backgroundGrid(m);
+  const palette = backgroundPalette(m) || {};
+  if (bg){
+    for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+      const code = bg[y]?.[x];
+      const color = code ? palette[code] : null;
+      if (color){
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th));
+      }
+    }
+  }
 
   // grid
   ctx.strokeStyle = getCSS('--grid','#cfd8dc'); ctx.lineWidth = 1;
@@ -1206,9 +1245,32 @@ function drawWorld(){
     wctx.fillStyle="#e5e7eb"; wctx.fillText(`${m.name}`, ox, oy-8);
 
     // map cells
+    const worldBg = backgroundGrid(m);
+    const worldPalette = backgroundPalette(m) || {};
+    if (worldBg){
+      for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+        const code = worldBg[y]?.[x];
+        const color = code ? worldPalette[code] : null;
+        if (color){
+          wctx.fillStyle = color;
+          wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+        } else {
+          wctx.fillStyle = "#fff";
+          wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+        }
+      }
+    } else {
+      for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
+        wctx.fillStyle = "#fff";
+        wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+      }
+    }
+
     for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-      wctx.fillStyle = (m.grid[y][x]===m.chars.wall) ? "#000" : "#fff";
-      wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+      if (m.grid[y][x]===m.chars.wall){
+        wctx.fillStyle = "#000";
+        wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
+      }
     }
 
     // spawn
