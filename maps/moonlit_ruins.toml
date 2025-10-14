@@ -12,7 +12,7 @@ w = 2
 h = 2
 
 [meta]
-tile_meters = 1.0
+tile_meters = 1
 biome = "ruins"
 notes = "Central plaza with pillars; wide corridors for 2x2 player."
 

@@ -16,7 +16,6 @@
   #cv{background:var(--floor);image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1);touch-action:none}
   .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none;white-space:pre-line}
   .ok{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
-  textarea{width:100%;min-height:120px}
   #world{width:100%;height:44vh;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab}
   #world:active{cursor:grabbing}
   .edge{display:flex;gap:6px;align-items:center}
@@ -39,15 +38,8 @@
     <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
     <select id="maps"></select>
-    <button id="exportBtn">Export TOML</button>
-    <button id="exportAllBtn">Export All</button>
-    <label><input id="importFiles" type="file" multiple accept=".toml"/> Load TOML(s)</label>
-    <button id="openFolder" style="display:none">Open Folder…</button>
-    <button id="refreshFolder" style="display:none">Refresh Folder</button>
-    <button id="requestPersistent" style="display:none">Grant Persistent Access</button>
-    <button id="testSave" style="display:none">Test Save</button>
-    <button id="clearStorage" style="display:none">Reset Cache</button>
-    <span id="fsHint" class="muted"></span>
+    <button id="saveMaps">Save Maps…</button>
+    <button id="reloadMaps">Reload Maps</button>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -64,11 +56,6 @@
   <canvas id="cv" width="960" height="540"></canvas>
 
   <section>
-    <strong>Current map TOML</strong>
-    <textarea id="toml"></textarea>
-  </section>
-
-  <section>
     <div class="row"><button id="renderWorld">World Overview</button>
       <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="1"></label>
     </div>
@@ -83,7 +70,9 @@ const nameIn = document.getElementById('mapName');
 const wIn = document.getElementById('w'), hIn = document.getElementById('h');
 const swIn = document.getElementById('sw'), shIn = document.getElementById('sh');
 const warn = document.getElementById('warn');
-const tomlArea = document.getElementById('toml');
+const saveMapsBtn = document.getElementById('saveMaps');
+const reloadMapsBtn = document.getElementById('reloadMaps');
+let currentToml = '';
 
 const edgeSel = {
   left: document.getElementById('edge_left'),
@@ -100,6 +89,31 @@ const model = {
   current: null
 };
 const CH = { wall:'#', floor:' ' };
+const staleFolderEntries = new Set();
+
+function slugifyName(name){
+  return String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g,'_')
+    .replace(/^_+|_+$/g,'')
+    || 'map';
+}
+
+function ensureFilename(map, usedNames){
+  if (map.filename){
+    if (usedNames) usedNames.add(map.filename);
+    return map.filename;
+  }
+  const base = slugifyName(map.name);
+  let candidate = `${base}.toml`;
+  let suffix = 2;
+  while (usedNames && usedNames.has(candidate)){
+    candidate = `${base}_${suffix++}.toml`;
+  }
+  map.filename = candidate;
+  if (usedNames) usedNames.add(candidate);
+  return candidate;
+}
 
 function makeEmptyExtras(){
   return { meta:null, legend:null, palette:null, layers:null, triggers:[], poi:[] };
@@ -156,7 +170,6 @@ function clearModel(){
   model.maps.clear();
   model.current = null;
   mapsSel.innerHTML = '';
-  tomlArea.value = '';
   warn.textContent = '';
   warn.style.display = 'none';
   warn.classList.remove('ok');
@@ -180,7 +193,9 @@ function makeNewMap(){
     spawn: {x:1,y:1,w:+swIn.value||2,h:+shIn.value||2},
     exits: {left:null,right:null,top:null,bottom:null},
     chars: {...CH},
-    extras: makeEmptyExtras()
+    extras: makeEmptyExtras(),
+    filename: null,
+    source: null
   };
   model.maps.set(id, data);
   setCurrent(id);
@@ -255,101 +270,17 @@ addEventListener('keydown', e=>{
   if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
 });
 
-document.getElementById('exportBtn').onclick = async ()=>{
-  const map = cur();
-  const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
-  const content = toToml(map);
-  
-  if (directoryHandle) {
-    try {
-      await saveFileToDirectory(filename, content);
-      showNotification(`Saved ${filename} to folder`);
-    } catch (err) {
-      console.error('Failed to save file:', err);
-      showNotification('Save failed - falling back to download');
-      fallbackDownload(content, filename);
-    }
-  } else {
-    fallbackDownload(content, filename);
-  }
-};
+if (saveMapsBtn) saveMapsBtn.onclick = handleSaveMapsClick;
+if (reloadMapsBtn) reloadMapsBtn.onclick = handleReloadMapsClick;
 
-document.getElementById('exportAllBtn').onclick = async ()=>{
-  console.log('Download All clicked');
-  console.log('directoryHandle exists:', !!directoryHandle);
-  
-  if (directoryHandle) {
-    console.log('Directory handle name:', directoryHandle.name);
-    try {
-      const permission = await directoryHandle.queryPermission({ mode: 'readwrite' });
-      console.log('Permission status:', permission);
-    } catch (err) {
-      console.log('Permission query failed:', err);
-    }
-    
-    let saved = 0;
-    let failed = 0;
-    let directoryExpired = false;
-    
-    for (const [id, map] of model.maps.entries()) {
-      const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
-      const content = toToml(map);
-      
-      if (!directoryExpired) {
-        try {
-          console.log(`Attempting to save ${filename}...`);
-          await saveFileToDirectory(filename, content);
-          console.log(`✅ Saved ${filename}`);
-          saved++;
-          continue;
-        } catch (err) {
-          console.log(`❌ Failed to save ${filename}:`, err);
-          if (err.message.includes('Directory handle expired')) {
-            directoryExpired = true;
-            showNotification('Directory access expired - remaining files will be downloaded. Use "Refresh Folder" to reconnect.');
-          }
-        }
-      }
-      
-      // Fallback to download
-      console.log(`📁 Downloading ${filename} as fallback`);
-      failed++;
-      fallbackDownload(content, filename);
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    if (failed === 0) {
-      showNotification(`✅ Downloaded ${saved} files to replace in maps folder`);
-    } else if (saved > 0) {
-      showNotification(`⚠️ Downloaded ${saved} files, ${failed} failed (check console)`);
-    } else {
-      showNotification(`📁 Downloaded ${failed} files (replace in maps folder)`);
-    }
-  } else {
-    console.log('No directory handle - falling back to downloads');
-    // Fallback to multiple downloads
-    for (const [id, map] of model.maps.entries()) {
-      const content = toToml(map);
-      const filename = map.name.replace(/\s+/g,'_').toLowerCase() + ".toml";
-      fallbackDownload(content, filename);
-      // Small delay to prevent browser from blocking multiple downloads
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    showNotification(`📁 Downloaded ${model.maps.size} files (replace in maps folder)`);
-  }
-};
-
-async function saveFileToDirectory(filename, content) {
-  if (!directoryHandle) {
-    throw new Error('No directory handle available');
-  }
+async function saveFileToDirectory(handle, filename, content) {
+  if (!handle) throw new Error('No directory handle available');
 
   try {
     console.log(`Attempting to save ${filename}...`);
 
-    // Try to remove the existing file first (if it exists)
     try {
-      await directoryHandle.removeEntry(filename);
+      await handle.removeEntry(filename);
       console.log(`Removed existing ${filename}`);
     } catch (removeErr) {
       if (removeErr.name !== 'NotFoundError') {
@@ -359,28 +290,23 @@ async function saveFileToDirectory(filename, content) {
       }
     }
 
-    // Now create the new file
-    const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+    const fileHandle = await handle.getFileHandle(filename, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(content);
     await writable.close();
 
     console.log(`✅ Successfully saved ${filename}`);
-    return; // Success!
-
   } catch (err) {
     console.error(`❌ Failed to save ${filename}:`, err);
 
     if (err.name === 'InvalidStateError') {
-      // Directory handle is stale - throw specific error to trigger fallback
-      throw new Error(`Directory handle expired for ${filename}. Please use "Refresh Folder" or file will be downloaded.`);
+      throw new Error(`Directory handle expired for ${filename}. Please re-select the folder.`);
     }
 
     if (err.name === 'NotAllowedError') {
-      throw new Error(`Permission denied for ${filename}. File may be open in another program or folder access was revoked.`);
+      throw new Error(`Permission denied for ${filename}. File may be open elsewhere or access was revoked.`);
     }
 
-    // Re-throw other errors
     throw err;
   }
 }
@@ -422,274 +348,185 @@ function showNotification(message) {
   setTimeout(() => notification.remove(), 3000);
 }
 
-document.getElementById('importFiles').addEventListener('change', async (e)=>{
-  const files = Array.from(e.target.files);
-  for (const f of files){
-    const txt = await f.text();
-    const obj = fromToml(txt);
-    model.maps.set(obj.id, obj);
-  }
-  setCurrent(model.current ?? model.maps.keys().next().value);
-});
+let directoryHandle = null;
 
-// Optional: folder import and save (Chromium)
-const openFolderBtn = document.getElementById('openFolder');
-const fsHint = document.getElementById('fsHint');
-const clearStorageBtn = document.getElementById('clearStorage');
-let directoryHandle = null; // Store directory handle for saving
+function forgetDirectoryHandle(){ directoryHandle = null; }
 
-// Persistent directory handle storage
-const DIRECTORY_HANDLE_KEY = 'lamy-maps-directory-handle';
-
-if ('showDirectoryPicker' in window){
-  const refreshFolderBtn = document.getElementById('refreshFolder');
-  
-  openFolderBtn.style.display = 'inline-block';
-  fsHint.textContent = ' (Folder import/save available)';
-  clearStorageBtn.style.display = 'inline-block';
-  
-  // Try to restore saved directory handle on page load
-  restoreSavedDirectory();
-  
-  async function setupFolder() {
+async function ensureDirectoryHandle(){
+  if (!('showDirectoryPicker' in window)) return null;
+  if (directoryHandle) {
     try {
-      directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      
-      // Save the directory handle for next time
-      await saveDirectoryHandle(directoryHandle);
-      
-      const previousId = model.current;
-      clearModel();
-      // Load all TOML files from the selected directory
-  const loadedCount = await loadFromDirectory();
-      
-      const nextId = (previousId && model.maps.has(previousId))
-        ? previousId
-        : model.maps.keys().next().value;
-  if (nextId) setCurrent(nextId);
-  else model.current = null;
-      updateExportButtons();
-      
-      // Show refresh button now that we have a folder
-      refreshFolderBtn.style.display = 'inline-block';
-      
-      // Reset button styling
-      openFolderBtn.textContent = 'Open Folder…';
-      openFolderBtn.style.background = '';
-      openFolderBtn.style.color = '';
-      
-      showNotification(`🔗 Connected to folder, loaded ${loadedCount} maps`);
-    } catch (err) {
-      if (err.name !== 'AbortError') { // User didn't cancel
-        console.error('Failed to open folder:', err);
-        showNotification('Failed to open folder');
+      const status = await directoryHandle.queryPermission?.({ mode: 'readwrite' });
+      if (status === 'granted') return directoryHandle;
+      if (status === undefined) return directoryHandle;
+      if (status === 'denied') {
+        forgetDirectoryHandle();
+      } else if (status === 'prompt') {
+        const granted = await directoryHandle.requestPermission?.({ mode: 'readwrite' });
+        if (granted === 'granted') return directoryHandle;
+        forgetDirectoryHandle();
       }
+    } catch {
+      forgetDirectoryHandle();
     }
   }
-  
-  openFolderBtn.onclick = setupFolder;
-  refreshFolderBtn.onclick = setupFolder;
-  
-  // Persistent permission button
-  const persistentBtn = document.getElementById('requestPersistent');
-  persistentBtn.onclick = async () => {
-    try {
-      const granted = await navigator.storage.persist();
-      if (granted) {
-        showNotification('✅ Persistent storage granted! Folder access will be remembered longer.');
-        persistentBtn.style.display = 'none';
-      } else {
-        showNotification(`💡 Persistent storage not granted (this is normal). Edge will still remember your folder for this session and often across restarts. To enable permanently: Edge Settings → Cookies and site permissions → All sites → localhost → Automatic downloads → Allow`);
-      }
-    } catch (err) {
-      console.error('Failed to request persistent storage:', err);
-      showNotification('❌ Could not request persistent storage');
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    directoryHandle = handle;
+    return handle;
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      console.error('Directory selection failed:', err);
+      showNotification('Unable to access folder; falling back to downloads.');
     }
-  };
-  
-  // Show persistent button if storage API is available
-  if ('storage' in navigator && 'persist' in navigator.storage) {
-    persistentBtn.style.display = 'inline-block';
+    return null;
   }
-  
-  clearStorageBtn.onclick = async () => {
-    try {
-      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_name');
-      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_timestamp');
-      console.log('Local cache cleared: directory handle metadata removed.');
-    } catch (err) {
-      console.error('Failed to clear local storage cache:', err);
-      showNotification('❌ Could not clear cache');
-      return;
-    }
+}
 
-    directoryHandle = null;
-    refreshFolderBtn.style.display = 'none';
-    openFolderBtn.textContent = 'Open Folder…';
-    openFolderBtn.style.background = '';
-    openFolderBtn.style.color = '';
-    fsHint.textContent = ' (Folder import/save available)';
+async function handleSaveMapsClick(){
+  if (!model.maps.size){
+    showNotification('No maps in workspace.');
+    return;
+  }
 
-    clearModel();
-    updateExportButtons();
+  const handle = await ensureDirectoryHandle();
+  const fallbackOnly = !handle;
+  const usedNames = new Set();
+  for (const m of model.maps.values()){
+    if (m.filename) usedNames.add(m.filename);
+  }
+  let saved = 0;
+  let failed = 0;
+  let expired = false;
 
-    try {
-      await loadInitialMaps();
-      showNotification('🧹 Cache cleared — manifest reloaded');
-    } catch (err) {
-      console.error('Failed to reload manifest after cache clear:', err);
-      showNotification('🧹 Cache cleared (reload failed; check console)');
-    }
-  };
-  
-  // Test save button
-  const testBtn = document.getElementById('testSave');
-  testBtn.onclick = async () => {
-    console.log('=== DIRECTORY HANDLE DEBUG ===');
-    console.log('directoryHandle exists:', !!directoryHandle);
-    
-    if (directoryHandle) {
-      console.log('Directory name:', directoryHandle.name);
+  if (handle && staleFolderEntries.size){
+    for (const name of Array.from(staleFolderEntries)){
       try {
-        const permission = await directoryHandle.queryPermission({ mode: 'readwrite' });
-        console.log('Permission status:', permission);
-        
-        if (permission === 'granted') {
-          console.log('Testing file creation...');
-          const testFile = await directoryHandle.getFileHandle('test_save.txt', { create: true });
-          const writable = await testFile.createWritable();
-          await writable.write('Test save at ' + new Date().toISOString());
-          await writable.close();
-          console.log('✅ Test file created successfully!');
-          
-          // Now test overwriting an existing file (remove and recreate)
-          console.log('Testing file remove/recreate...');
-          try {
-            // First remove the file
-            await directoryHandle.removeEntry('cave.toml');
-            console.log('Removed cave.toml');
-            
-            // Then recreate it
-            const recreatedFile = await directoryHandle.getFileHandle('cave.toml', { create: true });
-            const recreatedWritable = await recreatedFile.createWritable();
-            await recreatedWritable.write('[tiles]\nwall = "#"\nfloor = " "\n\n[spawn]\nx = 2\ny = 5\nw = 2\nh = 2\n\n# Test recreation\n');
-            await recreatedWritable.close();
-            console.log('✅ File remove/recreate test successful!');
-            showNotification('✅ Both create and remove/recreate tests successful!');
-          } catch (overwriteErr) {
-            console.error('❌ File remove/recreate test failed:', overwriteErr);
-            showNotification('❌ Create works, but remove/recreate failed: ' + overwriteErr.message);
-          }
-          
-        } else {
-          console.log('❌ Permission not granted');
-          showNotification('❌ Permission not granted');
-        }
+        await handle.removeEntry(name);
+        staleFolderEntries.delete(name);
+        console.log(`[Editor] Removed stale duplicate file ${name}`);
       } catch (err) {
-        console.error('❌ Test save failed:', err);
-        showNotification('❌ Test save failed: ' + err.message);
+        console.warn(`Failed to remove stale file ${name}:`, err);
+      }
+    }
+  }
+
+  for (const map of model.maps.values()){
+    const filename = ensureFilename(map, usedNames);
+    const content = toToml(map);
+
+    if (!fallbackOnly && !expired){
+      try {
+  await saveFileToDirectory(handle, filename, content);
+  map.filename = filename;
+  map.source = `folder:${filename}`;
+        saved++;
+        continue;
+      } catch (err) {
+        console.error(`Failed to save ${filename}:`, err);
+        failed++;
+        if (err?.message?.includes('Directory handle expired') || err?.name === 'InvalidStateError'){
+          forgetDirectoryHandle();
+          expired = true;
+          showNotification('Folder access expired — downloading remaining maps.');
+        } else {
+          showNotification(`Save issue for ${filename}; downloaded instead.`);
+        }
       }
     } else {
-      console.log('❌ No directory handle');
-      showNotification('❌ No directory handle - use "Open Folder" first');
+      failed++;
     }
-  };
-  
-  // Show test button
-  testBtn.style.display = 'inline-block';
-}
 
-async function saveDirectoryHandle(handle) {
-  try {
-    // Store the directory handle using IndexedDB via the browser's internal storage
-    if ('indexedDB' in window && handle) {
-      // Use the File System Access API's built-in persistence
-      await navigator.storage.persist();
-      
-      // Store handle reference for restoration
-      localStorage.setItem(DIRECTORY_HANDLE_KEY + '_name', handle.name);
-      localStorage.setItem(DIRECTORY_HANDLE_KEY + '_timestamp', Date.now().toString());
-      
-      // The actual handle will be stored by the browser's permission system
-      console.log('Directory handle saved for persistence');
-    }
-  } catch (err) {
-    console.warn('Failed to save directory handle:', err);
+    fallbackDownload(content, filename);
+    await new Promise(r => setTimeout(r, 75));
+  }
+
+  if (!fallbackOnly && !expired && failed === 0){
+    showNotification(`Saved ${saved} map${saved===1?'':'s'} to folder.`);
+  } else {
+    const total = model.maps.size;
+    showNotification(`Downloaded ${total - saved} of ${total} maps — replace them in your folder.`);
   }
 }
 
-async function restoreSavedDirectory() {
+async function handleReloadMapsClick(){
   try {
-    const savedName = localStorage.getItem(DIRECTORY_HANDLE_KEY + '_name');
-    const savedTimestamp = localStorage.getItem(DIRECTORY_HANDLE_KEY + '_timestamp');
-    
-    if (!savedName) return;
-    
-    // Check if saved recently (within 7 days, Edge tends to remember longer)
-    const age = Date.now() - parseInt(savedTimestamp || '0');
-    const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
-    
-    if (age > maxAge) {
-      console.log('Saved directory handle expired (older than 7 days)');
-      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_name');
-      localStorage.removeItem(DIRECTORY_HANDLE_KEY + '_timestamp');
+    const handle = await ensureDirectoryHandle();
+    const previousId = model.current;
+
+    if (handle){
+      clearModel();
+      const loaded = await loadFromDirectory(handle);
+      const nextId = (previousId && model.maps.has(previousId)) ? previousId : model.maps.keys().next().value;
+      if (nextId) setCurrent(nextId);
+      else model.current = null;
+      showNotification(`Reloaded ${loaded} map${loaded===1?'':'s'} from folder.`);
       return;
     }
-    
-    // Try to restore by requesting permission again (this is the limitation)
-    // The browser should remember the permission for the same origin
-    console.log(`Attempting to restore directory: ${savedName}`);
-    
-    // Show status that we remember the folder
-    fsHint.textContent = ` (Last used: ${savedName} - click "Open Folder" to reconnect)`;
-    openFolderBtn.textContent = `Reconnect to ${savedName}`;
-    openFolderBtn.style.background = '#22c55e';
-    openFolderBtn.style.color = 'white';
-    
+
+    await loadInitialMaps();
+    showNotification('Reloaded maps from manifest.');
   } catch (err) {
-    console.warn('Failed to restore directory handle:', err);
+    console.error('Reload failed:', err);
+    showNotification('Reload failed — see console for details.');
   }
 }
 
-async function loadFromDirectory() {
-  if (!directoryHandle) return 0;
-  
-  let loadedCount = 0;
+async function loadFromDirectory(handle = directoryHandle) {
+  if (!handle) return 0;
+
+  const entries = [];
   try {
-    for await (const [name, handle] of directoryHandle.entries()){
-      if (name.toLowerCase().endsWith('.toml')){
-        try {
-          const file = await handle.getFile();
-          const txt = await file.text();
-          const obj = fromToml(txt);
-          model.maps.set(obj.id, obj);
-          loadedCount++;
-        } catch (err) {
-          console.warn(`Failed to load ${name}:`, err);
-        }
-      }
+    for await (const [name, entry] of handle.entries()){
+      if (!name.toLowerCase().endsWith('.toml')) continue;
+      const isFile = entry.kind ? entry.kind === 'file' : typeof entry.getFile === 'function';
+      if (isFile) entries.push({ name, entry });
     }
-    console.log('[Editor] Loaded maps from folder:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
   } catch (err) {
-    console.error('Error reading directory:', err);
+    console.error('Error enumerating directory:', err);
+    return 0;
   }
-  
-  return loadedCount;
-}
 
-function updateExportButtons() {
-  const exportBtn = document.getElementById('exportBtn');
-  const exportAllBtn = document.getElementById('exportAllBtn');
-  
-  if (directoryHandle) {
-    exportBtn.textContent = 'Save TOML';
-    exportAllBtn.textContent = 'Download All';
-    fsHint.textContent = ' (Connected to folder - direct save enabled)';
-  } else {
-    exportBtn.textContent = 'Export TOML';
-    exportAllBtn.textContent = 'Download All';
-    fsHint.textContent = ' (Folder import/save available)';
+  const byId = new Map();
+  let duplicates = 0;
+  const duplicateNames = [];
+
+  for (const { name, entry } of entries){
+    try {
+      const file = await entry.getFile();
+      const txt = await file.text();
+      const obj = fromToml(txt, { filename: name });
+      if (!obj.filename) obj.filename = name;
+      obj.source = `folder:${name}`;
+      const stamp = file.lastModified ?? 0;
+      const existing = byId.get(obj.id);
+      if (existing){
+        duplicates++;
+        if (stamp < existing.stamp){
+          duplicateNames.push(name);
+          staleFolderEntries.add(name);
+          continue;
+        }
+        duplicateNames.push(existing.filename);
+        staleFolderEntries.add(existing.filename);
+      }
+      byId.set(obj.id, { map: obj, stamp, filename: name });
+    } catch (err) {
+      console.warn(`Failed to load ${name}:`, err);
+    }
   }
+
+  for (const { map } of byId.values()){
+    model.maps.set(map.id, map);
+  }
+
+  if (duplicates > 0){
+    console.warn(`[Editor] ${duplicates} duplicate map file(s) detected by id; keeping the newest copy per id.`, duplicateNames);
+    showNotification(`Duplicate map files detected — kept the newest copy per map id.`);
+  }
+
+  console.log('[Editor] Loaded maps from folder:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
+  return byId.size;
 }
 
 // Auto-discover ./maps/ on page load:
@@ -713,7 +550,10 @@ async function loadInitialMaps(){
   for (const url of urls){
     try{
       const txt = await (await fetch(url)).text();
-      const obj = fromToml(txt);
+      const base = url.split('/').pop() || null;
+      const obj = fromToml(txt, { filename: base, source: url });
+      if (!obj.filename) obj.filename = base;
+      if (!obj.source) obj.source = url;
       model.maps.set(obj.id, obj);
       found++;
     }catch{}
@@ -791,7 +631,11 @@ function syncHeader(){
 }
 
 // Keep TOML textarea current
-function syncToml(){ tomlArea.value = toToml(cur()); }
+function syncToml(){
+  const map = cur();
+  currentToml = map ? toToml(map) : '';
+  return currentToml;
+}
 
 // Render map
 function fit(){
@@ -969,7 +813,7 @@ function writeOrderedTable(out, entry, order){
     if (serialized !== null) out.push(`${key} = ${serialized}`);
   }
 }
-function fromToml(txt){
+function fromToml(txt, meta = {}){
   const t = parseTOML(txt);
   const rows = String(t.grid).replace(/\r\n?/g,"\n").split("\n"); // no trimming
   const H = rows.length, W = Math.max(...rows.map(r=>r.length));
@@ -985,7 +829,9 @@ function fromToml(txt){
     spawn: { x: t.spawn.x, y: t.spawn.y, w: t.spawn.w, h: t.spawn.h },
     exits: { left: t.exits?.left ?? null, right: t.exits?.right ?? null, top: t.exits?.top ?? null, bottom: t.exits?.bottom ?? null },
     chars: { wall: t.tiles?.wall ?? '#', floor: t.tiles?.floor ?? ' ' },
-    extras
+    extras,
+    filename: meta.filename ?? null,
+    source: meta.source ?? null
   };
 }
 

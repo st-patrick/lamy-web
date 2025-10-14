@@ -12,7 +12,7 @@ w = 2
 h = 2
 
 [meta]
-tile_meters = 1.0
+tile_meters = 1
 biome = "farmland"
 notes = "Open fields, big barn, boundary hedges with clear openings."
 
@@ -180,6 +180,7 @@ gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
 
 [exits]
 left = "8c8f8cf9-9144-4786-af91-757d8dad218f"
+
 [[triggers]]
 id = "scarecrow"
 type = "text"

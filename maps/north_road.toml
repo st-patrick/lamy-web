@@ -12,7 +12,7 @@ w = 2
 h = 2
 
 [meta]
-tile_meters = 1.0
+tile_meters = 1
 biome = "road"
 notes = "Straight road with pull-outs; sample text triggers."
 
@@ -181,6 +181,7 @@ ppppppppppppppppppppppppppppppppppppppppppppppp     pppppppppppppppppppppppppppp
 [exits]
 top = "94c93bb9-66ee-4be1-a1ff-1c484b02f77d"
 bottom = "8c8f8cf9-9144-4786-af91-757d8dad218f"
+
 [[triggers]]
 id = "milepost"
 type = "text"
@@ -190,6 +191,7 @@ y = 33
 w = 4
 h = 4
 text = "A weathered milepost: Aster 1, Shrine 1."
+
 [[triggers]]
 id = "camp"
 type = "text"

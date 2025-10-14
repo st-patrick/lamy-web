@@ -12,7 +12,7 @@ w = 2
 h = 2
 
 [meta]
-tile_meters = 1.0
+tile_meters = 1
 biome = "settlement"
 notes = "Simplified plaza with large-entrance buildings."
 
@@ -37,18 +37,21 @@ name = "Craftsmen's Guild"
 x = 21
 y = 28
 kind = "building"
+
 [[poi]]
 id = "inn"
 name = "Sailor's Rest Inn"
 x = 78
 y = 28
 kind = "building"
+
 [[poi]]
 id = "market"
 name = "Market Hall"
 x = 21
 y = 43
 kind = "building"
+
 [[poi]]
 id = "annex"
 name = "Temple Annex"
@@ -208,6 +211,7 @@ left = "ac7304c4-0a75-4bc1-8cfb-c983519d371d"
 right = "00b09d3c-ea4f-4056-a425-fc69471db727"
 top = "954f791f-c7bf-4ebe-8ea2-cc4b2f9eacf5"
 bottom = "7a23a047-5968-453e-8ff6-bb0acedcde53"
+
 [[triggers]]
 id = "plaza_welcome"
 type = "text"

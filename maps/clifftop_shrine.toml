@@ -12,7 +12,7 @@ w = 2
 h = 2
 
 [meta]
-tile_meters = 1.0
+tile_meters = 1
 biome = "shrine"
 notes = "Clifftop terrace with a larger sanctum."
 
@@ -180,6 +180,7 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
 [exits]
 bottom = "954f791f-c7bf-4ebe-8ea2-cc4b2f9eacf5"
+
 [[triggers]]
 id = "inscription"
 type = "text"
@@ -189,6 +190,7 @@ y = 26
 w = 16
 h = 2
 text = "“Only the wind remembers.”"
+
 [[triggers]]
 id = "vista"
 type = "text"
