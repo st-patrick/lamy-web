@@ -38,10 +38,8 @@
     <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
     <button id="resize" class="primary">Resize</button>
 
-  <span class="tool" id="paintWall" title="1">Wall (#)</span>
-  <span class="tool" id="paintErase" title="2">Erase ( )</span>
-  <span class="tool" id="paintLine" title="L">Line (L)</span>
-  <span class="tool" id="paintRect" title="R">Rect (R)</span>
+  <span class="tool" id="paintLine" title="Line (L) - RMB erases">Line (L)</span>
+  <span class="tool" id="paintRect" title="Rect (R) - RMB erases">Rect (R)</span>
   <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
     <select id="maps"></select>
@@ -97,8 +95,8 @@ const edgeSel = {
   bottom: document.getElementById('edge_bottom'),
 };
 
-const tools = { wall:'paintWall', erase:'paintErase', line:'paintLine', rect:'paintRect', spawn:'paintSpawn' };
-let tool = 'wall';
+const tools = { line:'paintLine', rect:'paintRect', spawn:'paintSpawn' };
+let tool = 'brush';
 
 const model = {
   maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
@@ -388,14 +386,13 @@ if (setDefaultBtn) setDefaultBtn.onclick = ()=>{
   drawAtlas();
 };
 
-// Keyboard shortcuts: 1=wall, 2=erase, 3 or P=spawn
+// Keyboard shortcuts: 1/B = brush, 3 or P=spawn
 addEventListener('keydown', e=>{
   const target = e.target;
   const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
   const editable = tag === 'input' || tag === 'textarea' || target?.isContentEditable;
   if (editable) return;
-  if (e.key === '1') setTool('wall');
-  if (e.key === '2') setTool('erase');
+  if (e.key === '1' || e.key.toLowerCase() === 'b') setTool('brush');
   if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
   if (e.key.toLowerCase() === 'l') setTool('line');
   if (e.key.toLowerCase() === 'r') setTool('rect');
@@ -867,6 +864,7 @@ const atlasState = {
   activePaintTool: null,
   paintStart: null,
   paintPreview: null,
+  shapeMode: 'paint',
   colorMode: false,
   activeColorKey: 'a',
   activeColorValue: '#ffbf47'
@@ -897,9 +895,9 @@ function setTool(t){
 }
 for (const [k,id] of Object.entries(tools)){
   const el = document.getElementById(id);
-  if (el) el.onclick = ()=> setTool(k);
+  if (el) el.onclick = ()=> setTool(tool === k ? 'brush' : k);
 }
-setTool('wall');
+setTool('brush');
 
 function resizeAtlasCanvas(){
   const rect = atlasCv.getBoundingClientRect();
@@ -1148,16 +1146,24 @@ function drawAtlas(){
 
     if (atlasState.paintPreview && atlasState.paintPreview.mapId === id){
       const preview = atlasState.paintPreview;
-      const baseColor = atlasState.colorMode ? atlasState.activeColorValue : '#22c55e';
+      const isErase = preview.mode === 'erase';
+      const baseColor = isErase ? '#f87171' : (atlasState.colorMode ? atlasState.activeColorValue : '#22c55e');
       atlasCtx.save();
-      atlasCtx.globalAlpha = 0.35;
+      atlasCtx.globalAlpha = isErase ? 0.25 : 0.35;
       atlasCtx.fillStyle = baseColor;
       if (preview.tool === 'rect'){
-        const minX = Math.min(preview.start.x, preview.end.x);
-        const minY = Math.min(preview.start.y, preview.end.y);
-        const width = Math.abs(preview.end.x - preview.start.x) + 1;
-        const height = Math.abs(preview.end.y - preview.start.y) + 1;
-        atlasCtx.fillRect(rect.x + minX * tile, rect.y + minY * tile, width * tile, height * tile);
+        if (isErase){
+          const minX = Math.min(preview.start.x, preview.end.x);
+          const minY = Math.min(preview.start.y, preview.end.y);
+          const width = Math.abs(preview.end.x - preview.start.x) + 1;
+          const height = Math.abs(preview.end.y - preview.start.y) + 1;
+          atlasCtx.fillRect(rect.x + minX * tile, rect.y + minY * tile, width * tile, height * tile);
+        } else {
+          const outline = collectRectPoints(preview.start, preview.end, false);
+          for (const pt of outline){
+            atlasCtx.fillRect(rect.x + pt.x * tile, rect.y + pt.y * tile, tile, tile);
+          }
+        }
       } else if (preview.tool === 'line'){
         const points = collectLinePoints(preview.start, preview.end);
         for (const pt of points){
@@ -1259,7 +1265,7 @@ function paintTile(map, localX, localY, activeTool){
     map.grid[localY][localX] = map.chars.floor;
     return true;
   }
-  if (activeTool === 'wall' || activeTool === 'line' || activeTool === 'rect'){
+  if (activeTool === 'brush'){
     if (map.grid[localY][localX] === map.chars.wall) return false;
     map.grid[localY][localX] = map.chars.wall;
     return true;
@@ -1322,41 +1328,69 @@ function collectLinePoints(start, end){
   return points;
 }
 
-function paintLineBetween(map, start, end, activeTool){
+function paintLineBetween(map, start, end, action){
   const points = collectLinePoints(start, end);
   let changed = false;
-  if (atlasState.colorMode && activeTool === 'line') ensureActivePaletteEntry(map);
+  if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
   for (const pt of points){
-    changed = paintTile(map, pt.x, pt.y, atlasState.colorMode ? activeTool : 'line') || changed;
+    const mode = action === 'erase' ? 'erase' : 'brush';
+    changed = paintTile(map, pt.x, pt.y, mode) || changed;
   }
   return changed;
 }
 
-function paintRectArea(map, start, end, activeTool){
+function collectRectPoints(start, end, filled){
   const minX = Math.min(start.x, end.x);
   const minY = Math.min(start.y, end.y);
   const maxX = Math.max(start.x, end.x);
   const maxY = Math.max(start.y, end.y);
-  let changed = false;
-  if (atlasState.colorMode && activeTool === 'rect') ensureActivePaletteEntry(map);
-  for (let y=minY; y<=maxY; y++){
-    for (let x=minX; x<=maxX; x++){
-      changed = paintTile(map, x, y, atlasState.colorMode ? activeTool : 'rect') || changed;
+  const points = [];
+  if (filled){
+    for (let y=minY; y<=maxY; y++){
+      for (let x=minX; x<=maxX; x++){
+        points.push({ x, y });
+      }
     }
+    return points;
+  }
+  const seen = new Set();
+  for (let x=minX; x<=maxX; x++){
+    seen.add(`${x},${minY}`);
+    seen.add(`${x},${maxY}`);
+  }
+  for (let y=minY; y<=maxY; y++){
+    seen.add(`${minX},${y}`);
+    seen.add(`${maxX},${y}`);
+  }
+  for (const key of seen){
+    const [x,y] = key.split(',').map(Number);
+    points.push({ x, y });
+  }
+  return points;
+}
+
+function paintRectArea(map, start, end, action){
+  const filled = action === 'erase';
+  const points = collectRectPoints(start, end, filled);
+  let changed = false;
+  if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
+  for (const pt of points){
+    const mode = action === 'erase' ? 'erase' : 'brush';
+    changed = paintTile(map, pt.x, pt.y, mode) || changed;
   }
   return changed;
 }
 
-function commitShape(mapId, activeTool, start, end){
+function commitShape(mapId, activeTool, start, end, mode){
   const map = model.maps.get(mapId);
   if (!map) return false;
   if (!start || !end) return false;
   if (atlasState.colorMode && activeTool === 'spawn') return false;
   let changed = false;
   if (activeTool === 'line'){
-    changed = paintLineBetween(map, start, end, activeTool);
+    changed = paintLineBetween(map, start, end, mode);
   } else if (activeTool === 'rect'){
-    changed = paintRectArea(map, start, end, activeTool);
+    changed = paintRectArea(map, start, end, mode);
   }
   if (!changed) return false;
 
@@ -1392,6 +1426,7 @@ function endPointer(e){
   atlasState.paintButtonMask = 1;
   atlasState.paintStart = null;
   atlasState.paintPreview = null;
+  atlasState.shapeMode = 'paint';
   updateCursor();
   if (hadPreview) drawAtlas();
 }
@@ -1415,12 +1450,32 @@ function handlePointerDown(e){
     if (model.current !== hit.id){
       setCurrent(hit.id);
     }
-    atlasState.pointerMode = 'paint';
-    atlasState.pointerId = e.pointerId;
-    atlasState.paintButtonMask = 2;
-    atlasState.activePaintTool = 'erase';
-    atlasCv.setPointerCapture(e.pointerId);
-    applyPointTool(pt.x, pt.y, atlasState.activePaintTool);
+    const localX = Math.floor((pt.x - hit.x) / hit.tile);
+    const localY = Math.floor((pt.y - hit.y) / hit.tile);
+    if (tool === 'line' || tool === 'rect'){
+      atlasState.pointerMode = 'shape';
+      atlasState.pointerId = e.pointerId;
+      atlasState.paintButtonMask = 2;
+      atlasState.activePaintTool = tool;
+      atlasState.paintStart = { mapId: hit.id, x: localX, y: localY };
+      atlasState.shapeMode = 'erase';
+      atlasState.paintPreview = {
+        mapId: hit.id,
+        tool,
+        mode: 'erase',
+        start: { x: localX, y: localY },
+        end: { x: localX, y: localY }
+      };
+      atlasCv.setPointerCapture(e.pointerId);
+      drawAtlas();
+    } else {
+      atlasState.pointerMode = 'paint';
+      atlasState.pointerId = e.pointerId;
+      atlasState.paintButtonMask = 2;
+      atlasState.activePaintTool = 'erase';
+      atlasCv.setPointerCapture(e.pointerId);
+      applyPointTool(pt.x, pt.y, 'erase');
+    }
     e.preventDefault();
     return;
   }
@@ -1443,10 +1498,17 @@ function handlePointerDown(e){
   if (activeTool === 'line' || activeTool === 'rect'){
     atlasState.pointerMode = 'shape';
     atlasState.paintStart = { mapId: hit.id, x: localX, y: localY };
-    atlasState.paintPreview = { mapId: hit.id, tool: activeTool, start: { x: localX, y: localY }, end: { x: localX, y: localY } };
+    atlasState.paintPreview = {
+      mapId: hit.id,
+      tool: activeTool,
+      mode: 'paint',
+      start: { x: localX, y: localY },
+      end: { x: localX, y: localY }
+    };
     atlasState.pointerId = e.pointerId;
     atlasState.paintButtonMask = 1;
     atlasState.activePaintTool = activeTool;
+    atlasState.shapeMode = 'paint';
     atlasCv.setPointerCapture(e.pointerId);
     drawAtlas();
     e.preventDefault();
@@ -1491,7 +1553,8 @@ function handlePointerMove(e){
       atlasState.paintPreview = {
         mapId: hit.id,
         tool: atlasState.activePaintTool,
-        start: { ...atlasState.paintStart },
+        mode: atlasState.shapeMode,
+        start: { x: atlasState.paintStart.x, y: atlasState.paintStart.y },
         end: { x: localX, y: localY }
       };
       drawAtlas();
@@ -1527,7 +1590,7 @@ function handlePointerUp(e){
   if (atlasState.pointerId === e.pointerId){
     if (atlasState.pointerMode === 'shape' && atlasState.paintPreview){
       const preview = atlasState.paintPreview;
-      commitShape(preview.mapId, preview.tool, preview.start, preview.end);
+      commitShape(preview.mapId, preview.tool, preview.start, preview.end, preview.mode || 'paint');
     }
     endPointer(e);
   }
