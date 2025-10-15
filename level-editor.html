@@ -26,17 +26,19 @@
   #atlas{width:100%;height:100%;display:block;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);touch-action:none;image-rendering:pixelated;border-radius:12px;cursor:grab;}
   #atlas.grab{cursor:grab;}
   #atlas.grabbing{cursor:grabbing;}
+  .paletteRow{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:6px;}
+  .color-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .color-chip{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,0.15);}
+  .color-chip.active{border-color:#0ea5e9;box-shadow:0 0 0 2px rgba(14,165,233,0.25);}
+  .color-chip span{display:none;}
+  .palette-group{display:flex;flex-direction:column;gap:6px;}
 </style>
 
 <header>
   <div class="row">
     <button id="newMap">New Map</button>
+  <button id="editorHelp" class="tool" title="Maps are fixed 99x70 with a 2x2 spawn. Hold space or middle mouse to pan. Right-click to erase.">?</button>
     <input id="mapName" type="text" placeholder="Map name"/>
-    <label>W<input id="w" type="number" min="4" max="300" value="99"></label>
-    <label>H<input id="h" type="number" min="4" max="300" value="70"></label>
-    <label>Spawn W<input id="sw" type="number" min="1" max="8" value="2"></label>
-    <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
-    <button id="resize" class="primary">Resize</button>
 
   <span class="tool" id="paintLine" title="Line (L) - RMB erases">Line (L)</span>
   <span class="tool" id="paintRect" title="Rect (R) - RMB erases">Rect (R)</span>
@@ -49,9 +51,20 @@
   <button id="renderWorld">Reset View</button>
   <label><input id="showGrid" type="checkbox" checked>Gridlines</label>
   <label><input id="colorMode" type="checkbox">Edit color</label>
-  <label>Color key <input id="colorKey" type="text" value="a" maxlength="2" style="width:40px"></label>
   <label>Color <input id="colorValue" type="color" value="#ffbf47"></label>
+  <button id="addColor" class="tool">Add Color</button>
   <label>Zoom <input id="z" type="range" min="0.05" max="4" step="0.02" value="0.8"></label>
+  </div>
+
+  <div class="paletteRow">
+    <div class="palette-group">
+      <span class="muted">Map colors</span>
+      <div id="mapColors" class="color-chips"></div>
+    </div>
+    <div class="palette-group">
+      <span class="muted">World palette</span>
+      <div id="worldColors" class="color-chips"></div>
+    </div>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -75,13 +88,14 @@ const atlasCv = document.getElementById('atlas'), atlasCtx = atlasCv.getContext(
 const zoomInput = document.getElementById('z');
 const gridToggle = document.getElementById('showGrid');
 const colorModeToggle = document.getElementById('colorMode');
-const colorKeyInput = document.getElementById('colorKey');
 const colorValueInput = document.getElementById('colorValue');
+const addColorBtn = document.getElementById('addColor');
+const mapColorContainer = document.getElementById('mapColors');
+const worldColorContainer = document.getElementById('worldColors');
+const helpBtn = document.getElementById('editorHelp');
 const resetViewBtn = document.getElementById('renderWorld');
 const mapsSel = document.getElementById('maps');
 const nameIn = document.getElementById('mapName');
-const wIn = document.getElementById('w'), hIn = document.getElementById('h');
-const swIn = document.getElementById('sw'), shIn = document.getElementById('sh');
 const warn = document.getElementById('warn');
 const saveMapsBtn = document.getElementById('saveMaps');
 const reloadMapsBtn = document.getElementById('reloadMaps');
@@ -103,9 +117,16 @@ const model = {
   current: null,
   defaultId: null,
   defaultSource: null,
-  manifestFiles: []
+  manifestFiles: [],
+  palette: new Map(),
+  paletteVersion: 0,
+  paletteCache: null
 };
 const CH = { wall:'#', floor:' ' };
+const DEFAULT_W = 99;
+const DEFAULT_H = 70;
+const DEFAULT_SPAWN_W = 2;
+const DEFAULT_SPAWN_H = 2;
 const staleFolderEntries = new Set();
 
 function slugifyName(name){
@@ -134,6 +155,59 @@ function ensureFilename(map, usedNames){
 
 function makeEmptyExtras(){
   return { meta:null, legend:null, palette:null, layers:null, triggers:[], poi:[] };
+}
+
+function markPaletteDirty(){
+  model.paletteVersion++;
+  model.paletteCache = null;
+}
+
+function ensurePaletteSeed(){
+  if (model.palette.size === 0){
+    model.palette.set('a', '#ffbf47');
+    markPaletteDirty();
+  }
+}
+
+function globalPaletteObject(){
+  if (!model.paletteCache){
+    model.paletteCache = Object.fromEntries(model.palette.entries());
+  }
+  return model.paletteCache;
+}
+
+function registerPaletteEntries(entries){
+  if (!entries || typeof entries !== 'object') return;
+  let updated = false;
+  for (const [key, value] of Object.entries(entries)){
+    if (!key || typeof value !== 'string') continue;
+    if (!model.palette.has(key)){
+      model.palette.set(key, value);
+      updated = true;
+    }
+  }
+  if (updated) markPaletteDirty();
+}
+
+function findPaletteKeyByColor(color){
+  if (!color) return null;
+  const target = color.toLowerCase();
+  for (const [key, value] of model.palette.entries()){
+    if (typeof value === 'string' && value.toLowerCase() === target) return key;
+  }
+  return null;
+}
+
+function allocatePaletteKey(){
+  const sequence = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  for (const ch of sequence){
+    if (!model.palette.has(ch)) return ch;
+  }
+  let idx = 1;
+  while (true){
+    const key = `c${idx++}`;
+    if (!model.palette.has(key)) return key;
+  }
 }
 
 function cloneExtrasFromToml(t){
@@ -174,13 +248,8 @@ function backgroundGrid(map){
   return map._bgCache.grid;
 }
 
-function backgroundPalette(map){
-  const palette = map?.extras?.palette;
-  if (!palette || typeof palette !== 'object') return null;
-  if (!map._paletteCache || map._paletteCache.source !== palette){
-    map._paletteCache = { source: palette, entries: { ...palette } };
-  }
-  return map._paletteCache.entries;
+function backgroundPalette(){
+  return globalPaletteObject();
 }
 
 function ensureBackgroundLayer(map){
@@ -199,10 +268,107 @@ function ensureBackgroundLayer(map){
   return bg;
 }
 
+function usedPaletteKeys(map){
+  const keys = new Set();
+  const grid = backgroundGrid(map);
+  if (!grid) return keys;
+  for (const row of grid){
+    for (const code of row){
+      if (code && code !== ' ') keys.add(code);
+    }
+  }
+  return keys;
+}
+
 function ensureBackgroundPalette(map){
   if (!map.extras) map.extras = makeEmptyExtras();
   if (!map.extras.palette || typeof map.extras.palette !== 'object') map.extras.palette = {};
+  const keys = usedPaletteKeys(map);
+  for (const key of keys){
+    if (!model.palette.has(key)) continue;
+    const color = model.palette.get(key);
+    if (map.extras.palette[key] !== color){
+      map.extras.palette[key] = color;
+    }
+  }
   return map.extras.palette;
+}
+
+function mapPaletteEntries(map){
+  const entries = {};
+  if (!map) return entries;
+  const keys = usedPaletteKeys(map);
+  for (const key of keys){
+    if (model.palette.has(key)) entries[key] = model.palette.get(key);
+  }
+  return entries;
+}
+
+function appendColorChip(container, key){
+  if (!container || !model.palette.has(key)) return;
+  const color = model.palette.get(key);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'color-chip';
+  btn.style.background = color;
+  btn.title = `${key}: ${color}`;
+  if (key === atlasState.activeColorKey) btn.classList.add('active');
+  btn.addEventListener('click', ()=>{
+    atlasState.activeColorKey = key;
+    atlasState.activeColorValue = color;
+    atlasState.pendingColorValue = color;
+    if (colorValueInput) colorValueInput.value = color;
+    renderPaletteButtons();
+    drawAtlas();
+  });
+  container.appendChild(btn);
+}
+
+function renderPaletteButtons(){
+  if (!mapColorContainer || !worldColorContainer) return;
+  ensurePaletteSeed();
+  ensureActiveColorKey();
+  const activeColor = model.palette.get(atlasState.activeColorKey) || atlasState.activeColorValue;
+  if (colorValueInput){
+    if (!atlasState.pendingColorValue) atlasState.pendingColorValue = activeColor;
+    colorValueInput.value = atlasState.pendingColorValue;
+  }
+
+  mapColorContainer.innerHTML = '';
+  worldColorContainer.innerHTML = '';
+
+  const currentMap = cur();
+  if (currentMap){
+    ensureBackgroundPalette(currentMap);
+    const mapKeys = Array.from(usedPaletteKeys(currentMap)).sort();
+    if (mapKeys.length === 0){
+      const placeholder = document.createElement('span');
+      placeholder.className = 'muted';
+      placeholder.textContent = 'No colors yet';
+      mapColorContainer.appendChild(placeholder);
+    } else {
+      for (const key of mapKeys){
+        appendColorChip(mapColorContainer, key);
+      }
+    }
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'muted';
+    placeholder.textContent = 'Select a map';
+    mapColorContainer.appendChild(placeholder);
+  }
+
+  const worldKeys = Array.from(model.palette.keys()).sort();
+  if (worldKeys.length === 0){
+    const placeholder = document.createElement('span');
+    placeholder.className = 'muted';
+    placeholder.textContent = 'Add a color to begin';
+    worldColorContainer.appendChild(placeholder);
+  } else {
+    for (const key of worldKeys){
+      appendColorChip(worldColorContainer, key);
+    }
+  }
 }
 
 function backgroundGridMatrix(map){
@@ -248,6 +414,9 @@ function clearModel(){
   model.defaultId = null;
   model.defaultSource = null;
   model.manifestFiles = [];
+  model.palette.clear();
+  model.paletteVersion = 0;
+  model.paletteCache = null;
   staleFolderEntries.clear();
   atlasInitialized = false;
   mapsSel.innerHTML = '';
@@ -259,6 +428,7 @@ function clearModel(){
     atlasCtx.clearRect(0, 0, atlasCv.width, atlasCv.height);
   }
   console.log('[Editor] Model cleared');
+  renderPaletteButtons();
 }
 
 function uuid(){
@@ -269,12 +439,15 @@ function uuid(){
 }
 
 function makeNewMap(){
+  ensurePaletteSeed();
   const id = uuid();
+  const width = DEFAULT_W;
+  const height = DEFAULT_H;
   const data = {
     id, name: `Map ${model.maps.size+1}`,
-    W: +wIn.value || 99, H: +hIn.value || 70,
-    grid: Array.from({length:+hIn.value||70}, ()=>Array.from({length:+wIn.value||99}, ()=> CH.floor)),
-    spawn: {x:1,y:1,w:+swIn.value||2,h:+shIn.value||2},
+    W: width, H: height,
+    grid: Array.from({length:height}, ()=>Array.from({length:width}, ()=> CH.floor)),
+    spawn: {x:1,y:1,w:DEFAULT_SPAWN_W,h:DEFAULT_SPAWN_H},
     exits: {left:null,right:null,top:null,bottom:null},
     chars: {...CH},
     extras: makeEmptyExtras(),
@@ -282,6 +455,7 @@ function makeNewMap(){
     source: null
   };
   resizeBackground(data);
+  ensureBackgroundPalette(data);
   model.maps.set(id, data);
   if (!model.defaultId){
     model.defaultId = id;
@@ -351,18 +525,6 @@ function onEdgeChange(side, toId){
 
 // UI wiring
 document.getElementById('newMap').onclick = makeNewMap;
-document.getElementById('resize').onclick = ()=>{
-  const m=cur(); m.W=+wIn.value; m.H=+hIn.value;
-  m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> (m.grid[y]?.[x] ?? CH.floor)));
-  m.spawn.w = +swIn.value; m.spawn.h = +shIn.value;
-  resizeBackground(m);
-  syncHeader();
-  syncToml();
-  validateSpawn();
-  runLint();
-  atlasInitialized = false;
-  drawAtlas();
-};
 mapsSel.onchange = e => setCurrent(e.target.value);
 nameIn.onchange = e => {
   cur().name = e.target.value || cur().name;
@@ -867,7 +1029,8 @@ const atlasState = {
   shapeMode: 'paint',
   colorMode: false,
   activeColorKey: 'a',
-  activeColorValue: '#ffbf47'
+  activeColorValue: '#ffbf47',
+  pendingColorValue: '#ffbf47'
 };
 let atlasInitialized = false;
 
@@ -1091,7 +1254,7 @@ function drawAtlas(){
     atlasCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
     const bg = backgroundGrid(map);
-    const palette = backgroundPalette(map) || {};
+  const palette = backgroundPalette() || {};
     if (bg){
       for (let y=0;y<map.H;y++){
         for (let x=0;x<map.W;x++){
@@ -1227,32 +1390,36 @@ function hitTestAtlas(x,y){
 }
 
 function ensureActiveColorKey(){
-  const raw = colorKeyInput?.value ?? atlasState.activeColorKey;
-  const sanitized = sanitizeColorKey(raw) || atlasState.activeColorKey;
-  atlasState.activeColorKey = sanitized;
-  if (colorKeyInput && colorKeyInput.value !== sanitized) colorKeyInput.value = sanitized;
-}
-
-function sanitizeColorKey(value){
-  const txt = String(value ?? '').trim();
-  if (!txt) return '';
-  return txt[0];
+  ensurePaletteSeed();
+  if (atlasState.activeColorKey && model.palette.has(atlasState.activeColorKey)){
+    atlasState.activeColorValue = model.palette.get(atlasState.activeColorKey);
+    return;
+  }
+  const first = model.palette.keys().next().value;
+  if (first){
+    atlasState.activeColorKey = first;
+    atlasState.activeColorValue = model.palette.get(first);
+    return;
+  }
+  atlasState.activeColorKey = 'a';
+  atlasState.activeColorValue = '#ffbf47';
 }
 
 function ensureActivePaletteEntry(map){
-  ensureBackgroundPalette(map);
+  if (!map) return;
   ensureActiveColorKey();
-  const palette = map.extras.palette;
-  if (!palette[atlasState.activeColorKey] || palette[atlasState.activeColorKey] !== atlasState.activeColorValue){
-    palette[atlasState.activeColorKey] = atlasState.activeColorValue;
-    if (map._paletteCache) map._paletteCache = { source: palette, entries: { ...palette } };
-  }
+  const key = atlasState.activeColorKey;
+  const color = model.palette.get(key);
+  if (!color) return;
+  ensureBackgroundPalette(map);
+  map.extras.palette[key] = color;
 }
 
 function paintTile(map, localX, localY, activeTool){
   if (!map) return false;
   if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return false;
   if (atlasState.colorMode){
+    ensureActiveColorKey();
     ensureBackgroundLayer(map);
     const code = (activeTool === 'erase') ? ' ' : atlasState.activeColorKey;
     if (code !== ' '){
@@ -1304,6 +1471,7 @@ function applyPointTool(worldX, worldY, forcedTool = null){
     validateSpawn();
   }
   runLint();
+  renderPaletteButtons();
   drawAtlas();
 }
 
@@ -1402,6 +1570,7 @@ function commitShape(mapId, activeTool, start, end, mode){
   syncToml();
   if (!atlasState.colorMode) validateSpawn();
   runLint();
+  renderPaletteButtons();
   drawAtlas();
   return true;
 }
@@ -1671,28 +1840,51 @@ if (colorModeToggle){
   colorModeToggle.addEventListener('change', e=>{
     atlasState.colorMode = e.target.checked;
     atlasState.paintPreview = null;
+    renderPaletteButtons();
     drawAtlas();
   });
 }
 
 if (colorValueInput){
-  atlasState.activeColorValue = colorValueInput.value || atlasState.activeColorValue;
+  atlasState.pendingColorValue = colorValueInput.value || atlasState.pendingColorValue;
   colorValueInput.addEventListener('input', e=>{
-    atlasState.activeColorValue = e.target.value || '#ffffff';
+    atlasState.pendingColorValue = e.target.value || '#ffffff';
   });
 }
 
-if (colorKeyInput){
-  ensureActiveColorKey();
-  colorKeyInput.addEventListener('input', e=>{
-    const sanitized = sanitizeColorKey(e.target.value) || atlasState.activeColorKey;
-    atlasState.activeColorKey = sanitized;
-    if (e.target.value !== sanitized) e.target.value = sanitized;
+if (addColorBtn){
+  addColorBtn.addEventListener('click', e=>{
+    e.preventDefault();
+    ensurePaletteSeed();
+    const color = (atlasState.pendingColorValue || colorValueInput?.value || '#ffffff').toLowerCase();
+    let key = findPaletteKeyByColor(color);
+    if (!key){
+      key = allocatePaletteKey();
+      model.palette.set(key, color);
+      markPaletteDirty();
+    }
+    atlasState.activeColorKey = key;
+    atlasState.activeColorValue = model.palette.get(key) || color;
+    atlasState.pendingColorValue = atlasState.activeColorValue;
+    if (colorValueInput) colorValueInput.value = atlasState.activeColorValue;
+    const map = cur();
+    if (map){
+      ensureBackgroundPalette(map);
+      ensureActivePaletteEntry(map);
+    }
+    renderPaletteButtons();
+    drawAtlas();
   });
 }
 
 if (resetViewBtn){
   resetViewBtn.onclick = ()=> resetAtlasView();
+}
+
+if (helpBtn){
+  helpBtn.addEventListener('click', ()=>{
+    showNotification('Maps stay 99x70 with a 2x2 spawn. Hold space or middle mouse to pan. Right-click erases any tool.');
+  });
 }
 
 addEventListener('keydown', e=>{
@@ -1731,7 +1923,6 @@ function syncHeader(){
   const m = cur();
   if (!m) return;
   nameIn.value = m.name;
-  wIn.value = m.W; hIn.value = m.H; swIn.value = m.spawn.w; shIn.value = m.spawn.h;
 
   mapsSel.innerHTML = '';
   for (const [id, map] of model.maps.entries()){
@@ -1754,6 +1945,7 @@ function syncHeader(){
     sel.value = cur().exits[side] ?? 'none';
   }
   validateSpawn();
+  renderPaletteButtons();
 }
 
 // Keep TOML textarea current
@@ -1803,9 +1995,11 @@ function toToml(m){
     out.push("");
   }
 
-  if (extras.palette && Object.keys(extras.palette).length){
+  const paletteEntries = mapPaletteEntries(m);
+  extras.palette = { ...paletteEntries };
+  if (Object.keys(paletteEntries).length){
     out.push(`[palette]`);
-    for (const [key, value] of Object.entries(extras.palette)){
+    for (const [key, value] of Object.entries(paletteEntries)){
       const serialized = formatTomlValue(value);
       if (serialized !== null) out.push(`${key} = ${serialized}`);
     }
@@ -1909,7 +2103,9 @@ function fromToml(txt, meta = {}){
     filename: meta.filename ?? null,
     source: meta.source ?? null
   };
+  registerPaletteEntries(extras.palette);
   resizeBackground(map);
+  ensureBackgroundPalette(map);
   return map;
 }
 

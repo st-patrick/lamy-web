@@ -179,6 +179,7 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 """
 
 [exits]
+right = "064136cb-5b9f-45ae-9f14-928f27b0bdda"
 bottom = "954f791f-c7bf-4ebe-8ea2-cc4b2f9eacf5"
 
 [[triggers]]

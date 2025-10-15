@@ -7,12 +7,13 @@
     "maps/moonlit_ruins.toml",
     "maps/north_road.toml",
     "maps/crystal_cavern.toml",
-    "maps/clifftop_shrine.toml"
+    "maps/clifftop_shrine.toml",
+    "maps/map_9.toml"
   ],
   "default": {
-    "id": "94c93bb9-66ee-4be1-a1ff-1c484b02f77d",
-    "file": "maps/clifftop_shrine.toml"
+    "id": "064136cb-5b9f-45ae-9f14-928f27b0bdda",
+    "file": "maps/map_9.toml"
   },
-  "defaultId": "94c93bb9-66ee-4be1-a1ff-1c484b02f77d",
-  "defaultFile": "maps/clifftop_shrine.toml"
+  "defaultId": "064136cb-5b9f-45ae-9f14-928f27b0bdda",
+  "defaultFile": "maps/map_9.toml"
 }
