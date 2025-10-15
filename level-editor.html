@@ -4,7 +4,8 @@
 <title>Level Editor — Edge Exits + TOML</title>
 <style>
   :root { --grid:#cfd8dc; --wall:#000; --floor:#fff; --spawn:#1976d2; }
-  body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f6f7fb;color:#223}
+  html,body{height:100%;}
+  body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f6f7fb;color:#223;display:flex;flex-direction:column;min-height:100%;}
   header{position:sticky;top:0;background:#fff;box-shadow:0 1px 0 rgba(0,0,0,.06);z-index:2;padding:8px 12px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   label{display:flex;gap:6px;align-items:center}
@@ -13,21 +14,18 @@
   select,input[type=text],input[type=number]{padding:6px;border-radius:8px;border:1px solid #c7d0d9;background:#fff}
   .tool{padding:4px 8px;border:1px solid #c7d0d9;border-radius:6px;user-select:none}
   .tool.active{background:#e0f2fe;border-color:#0ea5e9}
-  #cv{background:var(--floor);image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.1);touch-action:none}
   .banner{padding:8px 12px;background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;border-radius:8px;margin:8px 0;display:none;white-space:pre-line}
   .ok{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
-  #world{width:100%;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);cursor:grab;display:block}
-  #world:active{cursor:grabbing}
   .edge{display:flex;gap:6px;align-items:center}
-  select.bad{border-color:#ef4444; background:#fee2e2;}
+  select.bad{border-color:#ef4444;background:#fee2e2;}
   .muted{color:#6b7280}
-  #workspace{padding:12px;display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;box-sizing:border-box}
-  #workspace > section{flex:1 1 480px;min-width:320px;display:flex;flex-direction:column;gap:12px}
-  #mapPanel{flex:1.5 1 560px}
-  #worldPanel{flex:1 1 420px}
-  #mapPanel canvas,#worldPanel canvas{width:100%;height:auto;display:block}
-  #worldPanel{display:flex;flex-direction:column}
-  #worldPanel .row{justify-content:space-between}
+  main{flex:1;display:flex;flex-direction:column;min-height:0;}
+  #workspace{flex:1;padding:12px;display:flex;box-sizing:border-box;min-height:0;}
+  #workspace > section{flex:1;min-width:320px;display:flex;flex-direction:column;gap:12px;min-height:0;}
+  #editorPanel{flex:1;position:relative;min-height:0;}
+  #atlas{width:100%;height:100%;display:block;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);touch-action:none;image-rendering:pixelated;border-radius:12px;cursor:crosshair;}
+  #atlas.grab{cursor:grab;}
+  #atlas.grabbing{cursor:grabbing;}
 </style>
 
 <header>
@@ -44,10 +42,12 @@
     <span class="tool" id="paintErase" title="2">Erase ( )</span>
     <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
-  <select id="maps"></select>
-  <button id="makeDefault">Set Default Start</button>
-  <button id="saveMaps">Save Maps…</button>
-  <button id="reloadMaps">Reload Maps</button>
+    <select id="maps"></select>
+    <button id="makeDefault">Set Default Start</button>
+    <button id="saveMaps">Save Maps…</button>
+    <button id="reloadMaps">Reload Maps</button>
+    <button id="renderWorld">Reset View</button>
+    <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="0.8"></label>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -61,20 +61,15 @@
 </header>
 
 <main id="workspace">
-  <section id="mapPanel">
-    <canvas id="cv" width="960" height="540"></canvas>
-  </section>
-
-  <section id="worldPanel">
-    <div class="row"><button id="renderWorld">World Overview</button>
-      <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="1"></label>
-    </div>
-    <canvas id="world"></canvas>
+  <section id="editorPanel">
+    <canvas id="atlas"></canvas>
   </section>
 </main>
 
 <script>
-const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const atlasCv = document.getElementById('atlas'), atlasCtx = atlasCv.getContext('2d');
+const zoomInput = document.getElementById('z');
+const resetViewBtn = document.getElementById('renderWorld');
 const mapsSel = document.getElementById('maps');
 const nameIn = document.getElementById('mapName');
 const wIn = document.getElementById('w'), hIn = document.getElementById('h');
@@ -192,7 +187,10 @@ function clearModel(){
   warn.textContent = '';
   warn.style.display = 'none';
   warn.classList.remove('ok');
-  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (atlasCtx){
+    atlasCtx.setTransform(1,0,0,1,0,0);
+    atlasCtx.clearRect(0, 0, atlasCv.width, atlasCv.height);
+  }
   console.log('[Editor] Model cleared');
 }
 
@@ -221,6 +219,7 @@ function makeNewMap(){
     model.defaultId = id;
     model.defaultSource = data.source;
   }
+  atlasInitialized = false;
   setCurrent(id);
 }
 function setCurrent(id){
@@ -231,8 +230,11 @@ function setCurrent(id){
     model.defaultSource = currentMap?.source ?? model.defaultSource;
   }
   syncHeader();
-  fit(); draw(); syncToml(); runLint();
-  drawWorld();
+  syncToml();
+  validateSpawn();
+  runLint();
+  atlasState.hoverId = id;
+  drawAtlas();
 }
 function cur(){ return model.maps.get(model.current); }
 
@@ -275,6 +277,8 @@ function onEdgeChange(side, toId){
   syncHeader();
   syncToml();
   runLint();
+  atlasInitialized = false;
+  drawAtlas();
 }
 
 // UI wiring
@@ -283,10 +287,21 @@ document.getElementById('resize').onclick = ()=>{
   const m=cur(); m.W=+wIn.value; m.H=+hIn.value;
   m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> (m.grid[y]?.[x] ?? CH.floor)));
   m.spawn.w = +swIn.value; m.spawn.h = +shIn.value;
-  fit(); draw(); syncToml(); validateSpawn(); runLint();
+  syncHeader();
+  syncToml();
+  validateSpawn();
+  runLint();
+  atlasInitialized = false;
+  drawAtlas();
 };
 mapsSel.onchange = e => setCurrent(e.target.value);
-nameIn.onchange = e => { cur().name = e.target.value || cur().name; syncHeader(); syncToml(); runLint(); };
+nameIn.onchange = e => {
+  cur().name = e.target.value || cur().name;
+  syncHeader();
+  syncToml();
+  runLint();
+  drawAtlas();
+};
 
 for (const side of ["left","right","top","bottom"]){
   edgeSel[side].onchange = e => onEdgeChange(side, e.target.value);
@@ -299,11 +314,15 @@ if (setDefaultBtn) setDefaultBtn.onclick = ()=>{
   model.defaultSource = m.source ?? null;
   showNotification(`${m.name} will load first when the game boots.`);
   syncHeader();
-  drawWorld();
+  drawAtlas();
 };
 
 // Keyboard shortcuts: 1=wall, 2=erase, 3 or P=spawn
 addEventListener('keydown', e=>{
+  const target = e.target;
+  const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+  const editable = tag === 'input' || tag === 'textarea' || target?.isContentEditable;
+  if (editable) return;
   if (e.key === '1') setTool('wall');
   if (e.key === '2') setTool('erase');
   if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
@@ -645,7 +664,7 @@ async function loadFromDirectory(handle = directoryHandle) {
   }
 
   console.log('[Editor] Loaded maps from folder:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
-  drawWorld();
+  drawAtlas();
   return byId.size;
 }
 
@@ -748,42 +767,572 @@ async function loadInitialMaps(){
   }
   if (!model.current) makeNewMap(); // fallback blank
 
-  drawWorld();
+  drawAtlas();
 }
 
 window.addEventListener('DOMContentLoaded', ()=>{ loadInitialMaps(); });
 
 
-// Painting
-let down=false;
-cv.addEventListener('pointerdown', e=>{ down=true; paint(e); });
-cv.addEventListener('pointermove', e=>{ if (down) paint(e); });
-addEventListener('pointerup', ()=> down=false);
+// Unified atlas editor
+const atlasState = {
+  zoom: 0.8,
+  minZoom: 0.2,
+  maxZoom: 4,
+  pan: { x: 120, y: 120 },
+  pointerMode: null,
+  pointerId: null,
+  last: { x: 0, y: 0 },
+  hoverId: null,
+  spacePressed: false,
+  worldRects: [],
+  baseTile: 28,
+  gap: 2,
+  cardPadding: 16,
+  headerHeight: 28
+};
+let atlasInitialized = false;
+
+function updateCursor(){
+  const shouldGrab = atlasState.spacePressed && atlasState.pointerMode !== 'pan';
+  atlasCv.classList.toggle('grabbing', atlasState.pointerMode === 'pan');
+  atlasCv.classList.toggle('grab', shouldGrab);
+  if (atlasState.pointerMode === 'pan') return;
+  if (atlasState.hoverId && tool !== 'spawn') {
+    atlasCv.style.cursor = 'pointer';
+  } else {
+    atlasCv.style.cursor = 'crosshair';
+  }
+}
 
 function setTool(t){
   tool = t;
   for (const [k,id] of Object.entries(tools)){
-    document.getElementById(id).classList.toggle('active', k===t);
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', k===t);
   }
+  updateCursor();
 }
-for (const [k,id] of Object.entries(tools)){ document.getElementById(id).onclick = ()=> setTool(k); }
+for (const [k,id] of Object.entries(tools)){
+  const el = document.getElementById(id);
+  if (el) el.onclick = ()=> setTool(k);
+}
 setTool('wall');
 
-function toCell(e){
-  const rect = cv.getBoundingClientRect();
-  const px = e.clientX - rect.left, py = e.clientY - rect.top;
-  const tw = cv.width / cur().W, th = cv.height / cur().H;
-  return { x: Math.floor(px / tw), y: Math.floor(py / th) };
+function resizeAtlasCanvas(){
+  const rect = atlasCv.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width));
+  const height = Math.max(320, Math.floor(rect.height));
+  const targetW = Math.round(width * ratio);
+  const targetH = Math.round(height * ratio);
+  if (atlasCv.width !== targetW || atlasCv.height !== targetH){
+    atlasCv.width = targetW;
+    atlasCv.height = targetH;
+    atlasCtx.setTransform(1,0,0,1,0,0);
+    atlasCtx.scale(ratio, ratio);
+  }
 }
-function inBounds(x,y){ const m=cur(); return x>=0 && y>=0 && x<m.W && y<m.H; }
 
-function paint(e){
-  const m = cur(); const {x,y} = toCell(e); if (!inBounds(x,y)) return;
-  if (tool==='wall'){ m.grid[y][x] = m.chars.wall; }
-  else if (tool==='erase'){ m.grid[y][x] = m.chars.floor; }
-  else if (tool==='spawn'){ m.spawn.x = x; m.spawn.y = y; }
-  draw(); syncToml(); validateSpawn(); runLint();
+function layout(){
+  // Build pixel positions for every map, keeping linked sets cohesive while staging unlinked maps to the side.
+  const positions = new Map();
+  const queue = [];
+  const tile = atlasState.baseTile;
+  const gapPx = atlasState.gap * tile;
+
+  let start = null;
+  if (model.defaultId && model.maps.has(model.defaultId)) start = model.defaultId;
+  else if (model.current && model.maps.has(model.current)) start = model.current;
+  else start = Array.from(model.maps.keys())[0];
+  if (start && (!model.defaultId || !model.maps.has(model.defaultId))) model.defaultId = start;
+
+  if (start){
+    positions.set(start, { x: 0, y: 0 });
+  queue.push(start);
+  }
+
+  while(queue.length){
+    const id = queue.shift();
+    const map = model.maps.get(id);
+    const origin = positions.get(id);
+    if (!map || !origin) continue;
+    const width = map.W * tile;
+    const height = map.H * tile;
+
+    for (const [side,to] of Object.entries(map.exits)){
+      if (!to || !model.maps.has(to) || positions.has(to)) continue;
+      const next = model.maps.get(to);
+      if (!next) continue;
+      const nWidth = next.W * tile;
+      const nHeight = next.H * tile;
+      let x = origin.x;
+      let y = origin.y;
+      if (side === 'right'){
+        x = origin.x + width + gapPx;
+      } else if (side === 'left'){
+        x = origin.x - (nWidth + gapPx);
+      } else if (side === 'bottom'){
+        y = origin.y + height + gapPx;
+      } else if (side === 'top'){
+        y = origin.y - (nHeight + gapPx);
+      }
+      positions.set(to, { x, y });
+  queue.push(to);
+    }
+  }
+
+  const unplaced = [];
+  for (const id of model.maps.keys()){
+    if (!positions.has(id)) unplaced.push(id);
+  }
+
+  if (unplaced.length){
+    let maxRight = 0;
+    for (const [id,pos] of positions.entries()){
+      const map = model.maps.get(id);
+      if (!map) continue;
+      const right = pos.x + map.W * tile;
+      if (right > maxRight) maxRight = right;
+    }
+    const baseX = positions.size ? maxRight + gapPx * 2 : 0;
+    let cellW = 0;
+    let cellH = 0;
+    for (const id of unplaced){
+      const map = model.maps.get(id);
+      if (!map) continue;
+      const w = map.W * tile;
+      const h = map.H * tile;
+      if (w > cellW) cellW = w;
+      if (h > cellH) cellH = h;
+    }
+    cellW = cellW + gapPx * 2;
+    cellH = cellH + gapPx * 2;
+    const perColumn = Math.max(1, Math.ceil(Math.sqrt(unplaced.length)));
+    let col = 0;
+    let row = 0;
+    for (const id of unplaced){
+      const map = model.maps.get(id);
+      if (!map) continue;
+      const x = baseX + col * cellW;
+      const y = row * cellH;
+      positions.set(id, { x, y });
+      row++;
+      if (row >= perColumn){
+        row = 0;
+        col++;
+      }
+    }
+  }
+
+  return positions;
 }
+
+function drawAtlas(){
+  resizeAtlasCanvas();
+  atlasCtx.save();
+  atlasCtx.setTransform(1,0,0,1,0,0);
+  atlasCtx.clearRect(0,0,atlasCv.width, atlasCv.height);
+  atlasCtx.restore();
+
+  const positions = layout();
+  atlasState.worldRects = [];
+  const rectsById = new Map();
+  const tile = atlasState.baseTile;
+  const pad = atlasState.cardPadding;
+  const header = atlasState.headerHeight;
+  const floorColor = getCSS('--floor','#fff');
+  const gridColor = getCSS('--grid','#cfd8dc');
+  const wallColor = getCSS('--wall','#000');
+  const spawnColor = getCSS('--spawn','#1976d2');
+
+  atlasCtx.save();
+  atlasCtx.translate(atlasState.pan.x, atlasState.pan.y);
+  atlasCtx.scale(atlasState.zoom, atlasState.zoom);
+  atlasCtx.lineJoin = 'round';
+  atlasCtx.lineCap = 'round';
+  atlasCtx.font = '16px "Segoe UI", sans-serif';
+  atlasCtx.textBaseline = 'top';
+
+  for (const [id,p] of positions){
+  const map = model.maps.get(id);
+  if (!map) continue;
+  const ox = p.x;
+  const oy = p.y;
+    const rect = {
+      id,
+      x: ox,
+      y: oy,
+      w: map.W * tile,
+      h: map.H * tile,
+      tile
+    };
+    rectsById.set(id, rect);
+    atlasState.worldRects.push(rect);
+  }
+
+  const drawnLinks = new Set();
+  const linkKey = (a,b)=> a<b ? `${a}|${b}` : `${b}|${a}`;
+  atlasCtx.strokeStyle = '#4b5563';
+  atlasCtx.lineWidth = Math.max(1/atlasState.zoom, 0.75);
+  for (const [id, rect] of rectsById){
+    const map = model.maps.get(id);
+    if (!map) continue;
+    for (const [side,to] of Object.entries(map.exits)){
+      if (!to || !rectsById.has(to)) continue;
+      const key = linkKey(id,to);
+      if (drawnLinks.has(key)) continue;
+      drawnLinks.add(key);
+      const target = rectsById.get(to);
+      atlasCtx.beginPath();
+      atlasCtx.moveTo(rect.x + rect.w/2, rect.y + rect.h/2);
+      atlasCtx.lineTo(target.x + target.w/2, target.y + target.h/2);
+      atlasCtx.stroke();
+    }
+  }
+
+  for (const [id, rect] of rectsById){
+    const map = model.maps.get(id);
+    if (!map) continue;
+  const cardX = rect.x - pad;
+  const cardY = rect.y - (header + 4);
+  const cardW = rect.w + pad*2;
+  const cardH = rect.h + pad + header + 8;
+  const isDefault = id === model.defaultId;
+  const title = isDefault ? `${map.name} [default]` : map.name;
+
+    atlasCtx.fillStyle = '#0f172a';
+    atlasCtx.fillRect(cardX, cardY, cardW, cardH);
+    atlasCtx.fillStyle = '#1f2937';
+    atlasCtx.fillRect(cardX, cardY, cardW, header);
+    atlasCtx.fillStyle = '#e5e7eb';
+  atlasCtx.fillText(title, cardX + 12, cardY + 6);
+    atlasCtx.fillStyle = floorColor;
+    atlasCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+    const bg = backgroundGrid(map);
+    const palette = backgroundPalette(map) || {};
+    if (bg){
+      for (let y=0;y<map.H;y++){
+        for (let x=0;x<map.W;x++){
+          const code = bg[y]?.[x];
+          const color = code ? palette[code] : null;
+          if (!color) continue;
+          atlasCtx.fillStyle = color;
+          atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
+        }
+      }
+    }
+
+    for (let y=0;y<map.H;y++){
+      for (let x=0;x<map.W;x++){
+        if (map.grid[y][x] === map.chars.wall){
+          atlasCtx.fillStyle = wallColor;
+          atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
+        }
+      }
+    }
+
+    atlasCtx.strokeStyle = gridColor;
+    atlasCtx.lineWidth = Math.max(1/atlasState.zoom, 0.5);
+    atlasCtx.beginPath();
+    for (let gx=0; gx<=map.W; gx++){
+      const px = rect.x + gx*tile;
+      atlasCtx.moveTo(px, rect.y);
+      atlasCtx.lineTo(px, rect.y + rect.h);
+    }
+    for (let gy=0; gy<=map.H; gy++){
+      const py = rect.y + gy*tile;
+      atlasCtx.moveTo(rect.x, py);
+      atlasCtx.lineTo(rect.x + rect.w, py);
+    }
+    atlasCtx.stroke();
+
+    atlasCtx.fillStyle = spawnColor;
+    atlasCtx.fillRect(
+      rect.x + map.spawn.x * tile,
+      rect.y + map.spawn.y * tile,
+      map.spawn.w * tile,
+      map.spawn.h * tile
+    );
+
+    if (id === atlasState.hoverId || id === model.current){
+      atlasCtx.lineWidth = Math.max(2/atlasState.zoom, 1);
+      atlasCtx.strokeStyle = (id === model.current) ? '#22c55e' : '#eab308';
+      atlasCtx.strokeRect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4);
+    }
+  }
+
+  atlasCtx.restore();
+
+  if (!atlasInitialized && atlasState.worldRects.length){
+    centerAtlasOnContent();
+    atlasInitialized = true;
+    requestAnimationFrame(drawAtlas);
+  }
+}
+
+function centerAtlasOnContent(){
+  if (!atlasState.worldRects.length) return;
+  const bounds = atlasState.worldRects.reduce((acc, r)=>{
+    const minX = Math.min(acc.minX, r.x);
+    const minY = Math.min(acc.minY, r.y);
+    const maxX = Math.max(acc.maxX, r.x + r.w);
+    const maxY = Math.max(acc.maxY, r.y + r.h);
+    return { minX, minY, maxX, maxY };
+  }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  if (!isFinite(bounds.minX)) return;
+  const rect = atlasCv.getBoundingClientRect();
+  const contentW = bounds.maxX - bounds.minX;
+  const contentH = bounds.maxY - bounds.minY;
+  const margin = 80;
+  const viewW = Math.max(320, rect.width - margin);
+  const viewH = Math.max(320, rect.height - margin);
+  const zoomX = viewW / contentW;
+  const zoomY = viewH / contentH;
+  const nextZoom = Math.min(atlasState.maxZoom, Math.max(atlasState.minZoom, Math.min(zoomX, zoomY)));
+  atlasState.zoom = nextZoom;
+  atlasState.pan.x = rect.width/2 - (bounds.minX + contentW/2) * nextZoom;
+  atlasState.pan.y = rect.height/2 - (bounds.minY + contentH/2) * nextZoom;
+  if (zoomInput) zoomInput.value = nextZoom.toFixed(2);
+}
+
+function atlasWorldPoint(e){
+  const rect = atlasCv.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left - atlasState.pan.x) / atlasState.zoom,
+    y: (e.clientY - rect.top - atlasState.pan.y) / atlasState.zoom,
+    screenX: e.clientX - rect.left,
+    screenY: e.clientY - rect.top
+  };
+}
+
+function hitTestAtlas(x,y){
+  for (let i=atlasState.worldRects.length-1; i>=0; i--){
+    const r = atlasState.worldRects[i];
+    if (x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h) return r;
+  }
+  return null;
+}
+
+function applyToolAt(worldX, worldY){
+  const hit = hitTestAtlas(worldX, worldY);
+  if (!hit) return;
+  let map = model.maps.get(hit.id);
+  if (!map) return;
+  const localX = Math.floor((worldX - hit.x) / hit.tile);
+  const localY = Math.floor((worldY - hit.y) / hit.tile);
+  if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return;
+
+  let changed = false;
+  let switched = false;
+  if (tool === 'wall'){
+    if (map.grid[localY][localX] !== map.chars.wall){
+      map.grid[localY][localX] = map.chars.wall;
+      changed = true;
+    }
+  } else if (tool === 'erase'){
+    if (map.grid[localY][localX] !== map.chars.floor){
+      map.grid[localY][localX] = map.chars.floor;
+      changed = true;
+    }
+  } else if (tool === 'spawn'){
+    if (map.spawn.x !== localX || map.spawn.y !== localY){
+      map.spawn.x = localX;
+      map.spawn.y = localY;
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+
+  if (model.current !== map.id){
+    setCurrent(map.id);
+    map = cur();
+    if (!map) return;
+    atlasState.hoverId = map.id;
+    switched = true;
+  }
+
+  if (switched) return;
+
+  syncToml();
+  validateSpawn();
+  runLint();
+  drawAtlas();
+}
+
+function beginPan(e){
+  atlasState.pointerMode = 'pan';
+  atlasState.pointerId = e.pointerId;
+  atlasState.last = { x: e.clientX, y: e.clientY };
+  atlasCv.setPointerCapture(e.pointerId);
+  updateCursor();
+}
+
+function endPointer(e){
+  if (e && atlasState.pointerId !== e.pointerId) return;
+  if (atlasState.pointerId !== null){
+    try { atlasCv.releasePointerCapture(atlasState.pointerId); } catch {}
+  }
+  atlasState.pointerMode = null;
+  atlasState.pointerId = null;
+  updateCursor();
+}
+
+function handlePointerDown(e){
+  if (!atlasCv.contains(e.target)) return;
+  const isMiddle = e.button === 1;
+  const isSpacePan = atlasState.spacePressed && e.button === 0;
+  if (isMiddle || isSpacePan){
+    beginPan(e);
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0) return;
+
+  const pt = atlasWorldPoint(e);
+  const hit = hitTestAtlas(pt.x, pt.y);
+  if (!hit) return;
+  atlasState.hoverId = hit.id;
+  if (model.current !== hit.id){
+    setCurrent(hit.id);
+  }
+  atlasState.pointerMode = 'paint';
+  atlasState.pointerId = e.pointerId;
+  atlasCv.setPointerCapture(e.pointerId);
+  applyToolAt(pt.x, pt.y);
+  e.preventDefault();
+}
+
+function handlePointerMove(e){
+  if (atlasState.pointerId === e.pointerId){
+    if (atlasState.pointerMode === 'pan'){
+      const dx = e.clientX - atlasState.last.x;
+      const dy = e.clientY - atlasState.last.y;
+      atlasState.pan.x += dx;
+      atlasState.pan.y += dy;
+      atlasState.last = { x: e.clientX, y: e.clientY };
+      drawAtlas();
+      e.preventDefault();
+      return;
+    }
+    if (atlasState.pointerMode === 'paint'){
+      if ((e.buttons & 1) === 0){
+        endPointer(e);
+        return;
+      }
+      const pt = atlasWorldPoint(e);
+      applyToolAt(pt.x, pt.y);
+      e.preventDefault();
+      return;
+    }
+  }
+
+  if (atlasState.pointerMode === null){
+    const pt = atlasWorldPoint(e);
+    const hit = hitTestAtlas(pt.x, pt.y);
+    const nextHover = hit ? hit.id : null;
+    if (nextHover !== atlasState.hoverId){
+      atlasState.hoverId = nextHover;
+      updateCursor();
+      drawAtlas();
+    }
+  }
+}
+
+function handlePointerUp(e){
+  if (atlasState.pointerId === e.pointerId){
+    endPointer(e);
+  }
+}
+
+function setZoom(nextZoom, pivot){
+  const clamped = Math.min(atlasState.maxZoom, Math.max(atlasState.minZoom, nextZoom));
+  const prevZoom = atlasState.zoom;
+  if (Math.abs(prevZoom - clamped) < 1e-4) return;
+  let world;
+  let screen;
+  if (pivot && pivot.world && pivot.screen){
+    world = pivot.world;
+    screen = pivot.screen;
+  } else {
+    const rect = atlasCv.getBoundingClientRect();
+    world = {
+      x: (rect.width / 2 - atlasState.pan.x) / prevZoom,
+      y: (rect.height / 2 - atlasState.pan.y) / prevZoom
+    };
+    screen = { x: rect.width / 2, y: rect.height / 2 };
+  }
+  atlasState.zoom = clamped;
+  atlasState.pan.x = screen.x - world.x * clamped;
+  atlasState.pan.y = screen.y - world.y * clamped;
+  if (zoomInput) zoomInput.value = clamped.toFixed(2);
+  drawAtlas();
+}
+
+function handleWheel(e){
+  e.preventDefault();
+  const delta = -e.deltaY;
+  const scale = Math.exp(delta * 0.0015);
+  const nextZoom = atlasState.zoom * scale;
+  const pt = atlasWorldPoint(e);
+  setZoom(nextZoom, { world: { x: pt.x, y: pt.y }, screen: { x: pt.screenX, y: pt.screenY } });
+}
+
+function resetAtlasView(){
+  atlasInitialized = false;
+  drawAtlas();
+}
+
+atlasCv.addEventListener('pointerdown', handlePointerDown);
+atlasCv.addEventListener('pointermove', handlePointerMove);
+addEventListener('pointerup', handlePointerUp);
+addEventListener('pointercancel', handlePointerUp);
+atlasCv.addEventListener('pointerleave', e=>{
+  if (atlasState.pointerMode === null){
+    atlasState.hoverId = null;
+    updateCursor();
+    drawAtlas();
+  }
+});
+atlasCv.addEventListener('wheel', handleWheel, { passive:false });
+
+if (zoomInput){
+  zoomInput.value = atlasState.zoom.toFixed(2);
+  zoomInput.addEventListener('input', e=>{
+    const next = parseFloat(e.target.value);
+    if (!Number.isFinite(next)) return;
+    setZoom(next);
+    atlasInitialized = true;
+  });
+}
+
+if (resetViewBtn){
+  resetViewBtn.onclick = ()=> resetAtlasView();
+}
+
+addEventListener('keydown', e=>{
+  if (e.code === 'Space' && !e.repeat){
+    const target = e.target;
+    const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+    const editable = tag === 'input' || tag === 'textarea' || target?.isContentEditable;
+    if (editable) return;
+    atlasState.spacePressed = true;
+    updateCursor();
+    e.preventDefault();
+  }
+});
+addEventListener('keyup', e=>{
+  if (e.code === 'Space'){
+    atlasState.spacePressed = false;
+    if (atlasState.pointerMode !== 'pan') updateCursor();
+  }
+});
+
+addEventListener('resize', ()=>{
+  atlasInitialized = false;
+  drawAtlas();
+});
 
 // Spawn validation
 function validateSpawn(){
@@ -828,58 +1377,6 @@ function syncToml(){
   const map = cur();
   currentToml = map ? toToml(map) : '';
   return currentToml;
-}
-
-// Render map
-function fit(){
-  const host = cv.parentElement;
-  const hostWidth = host?.clientWidth || cv.getBoundingClientRect().width || innerWidth - 24;
-  const maxW = Math.min(hostWidth, 1400);
-  const aspect = cur().W / cur().H;
-  let cw = maxW, ch = Math.round(cw / aspect);
-  const maxH = Math.max(320, innerHeight * 0.6);
-  if (ch > maxH){ ch = Math.round(maxH); cw = Math.round(ch * aspect); }
-  cv.width = cw; cv.height = ch;
-}
-addEventListener('resize', ()=>{ fit(); draw(); });
-
-function draw(){
-  const m = cur();
-  const tw = cv.width / m.W, th = cv.height / m.H;
-
-  ctx.fillStyle = getCSS('--floor','#fff');
-  ctx.fillRect(0,0,cv.width,cv.height);
-
-  const bg = backgroundGrid(m);
-  const palette = backgroundPalette(m) || {};
-  if (bg){
-    for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-      const code = bg[y]?.[x];
-      const color = code ? palette[code] : null;
-      if (color){
-        ctx.fillStyle = color;
-        ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th));
-      }
-    }
-  }
-
-  // grid
-  ctx.strokeStyle = getCSS('--grid','#cfd8dc'); ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x=0;x<=m.W;x++){ const px = Math.round(x*tw)+.5; ctx.moveTo(px,0); ctx.lineTo(px,cv.height); }
-  for (let y=0;y<=m.H;y++){ const py = Math.round(y*th)+.5; ctx.moveTo(0,py); ctx.lineTo(cv.width,py); }
-  ctx.stroke();
-
-  // tiles (draw all cells; spaces show as floor)
-  for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-    if (m.grid[y][x]===m.chars.wall){
-      ctx.fillStyle = getCSS('--wall','#000');
-      ctx.fillRect(Math.round(x*tw), Math.round(y*th), Math.ceil(tw), Math.ceil(th));
-    }
-  }
-  // spawn rectangle
-  ctx.fillStyle = getCSS('--spawn','#1976d2');
-  ctx.fillRect(Math.round(m.spawn.x*tw), Math.round(m.spawn.y*th), Math.ceil(m.spawn.w*tw), Math.ceil(m.spawn.h*th));
 }
 
 // TOML IO — preserve whitespace and blank rows
@@ -1198,186 +1695,6 @@ function short(id){
   const m = model.maps.get(id);
   return m ? `${m.name}` : id.slice(0,8);
 }
-
-// World overview
-// World overview — clickable atlas
-const worldCv = document.getElementById('world'), wctx = worldCv.getContext('2d');
-const zoomInput = document.getElementById('z');
-let Z=0.6, pan={x:60,y:60}, dragging=false, last={x:0,y:0}, atlasInitialized=false;
-let worldRects = []; // [{id,x,y,w,h}] in world coords (pre-translate/scale)
-let hoverId = null;
-
-document.getElementById('renderWorld').onclick = drawWorld;
-if (zoomInput){
-  zoomInput.value = String(Z);
-  zoomInput.oninput = e => { Z=+e.target.value; drawWorld(); };
-}
-
-worldCv.addEventListener('pointerdown', e=>{
-  const pt = worldPoint(e);
-  // If we clicked a map rect: select it; else begin pan
-  const hit = hitTest(pt.x, pt.y);
-  if (hit){ setCurrent(hit.id); drawWorld(); return; }
-  dragging=true; last={x:e.clientX,y:e.clientY};
-});
-addEventListener('pointerup', ()=> dragging=false);
-addEventListener('pointermove', e=>{
-  if (dragging){
-    pan.x+=e.clientX-last.x; pan.y+=e.clientY-last.y; last={x:e.clientX,y:e.clientY};
-    drawWorld(); return;
-  }
-  // hover
-  const pt = worldPoint(e);
-  const hit = hitTest(pt.x, pt.y);
-  const nextHover = hit ? hit.id : null;
-  if (nextHover !== hoverId){
-    hoverId = nextHover;
-    worldCv.style.cursor = hoverId ? 'pointer' : 'grab';
-    drawWorld();
-  }
-});
-
-function layout(){
-  const pos = new Map(), q = [];
-  const DIR = { left:{x:-1,y:0}, right:{x:1,y:0}, top:{x:0,y:-1}, bottom:{x:0,y:1} };
-  let start = null;
-  if (model.defaultId && model.maps.has(model.defaultId)) start = model.defaultId;
-  else if (model.current && model.maps.has(model.current)) start = model.current;
-  else start = Array.from(model.maps.keys())[0];
-  if (start && (!model.defaultId || !model.maps.has(model.defaultId))) model.defaultId = start;
-  if (!start) return pos;
-  pos.set(start, {x:0,y:0}); q.push(start);
-  while(q.length){
-    const id = q.shift(), p = pos.get(id), m = model.maps.get(id);
-    for (const [side,to] of Object.entries(m.exits)){
-      if (!to || !model.maps.has(to)) continue;
-      if (!pos.has(to)){
-        const d = DIR[side];
-        pos.set(to, { x: p.x + d.x, y: p.y + d.y });
-        q.push(to);
-      }
-    }
-  }
-  return pos;
-}
-
-function drawWorld(){
-  resizeWorld();
-  wctx.clearRect(0,0,worldCv.width,worldCv.height);
-  const pos = layout(); wctx.save(); wctx.translate(pan.x, pan.y); wctx.scale(Z,Z);
-  const tile = 6;
-
-  worldRects = [];
-
-  // links first
-  wctx.strokeStyle="#4b5563"; wctx.lineWidth = 1/Z;
-  for (const [id,p] of pos){
-    const m = model.maps.get(id); if (!m) continue;
-    const A = {x: p.x*(m.W+4)*tile, y: p.y*(m.H+4)*tile, w: m.W*tile, h: m.H*tile};
-    for (const [side,to] of Object.entries(m.exits)){
-      if (!to || !pos.has(to)) continue;
-      const n = model.maps.get(to), q = pos.get(to);
-      const B = {x: q.x*(n.W+4)*tile, y: q.y*(n.H+4)*tile, w: n.W*tile, h: n.H*tile};
-      wctx.beginPath(); wctx.moveTo(A.x+A.w/2, A.y+A.h/2); wctx.lineTo(B.x+B.w/2, B.y+B.h/2); wctx.stroke();
-    }
-  }
-
-  // maps
-  for (const [id,p] of pos){
-    const m = model.maps.get(id); if (!m) continue;
-    const ox = p.x*(m.W+4)*tile, oy = p.y*(m.H+4)*tile;
-    const rect = { id, x: ox, y: oy, w: m.W*tile, h: m.H*tile };
-    worldRects.push(rect);
-
-    // card bg + title
-    wctx.fillStyle="#111827"; wctx.fillRect(ox-4, oy-24, m.W*tile+8, m.H*tile+28);
-    wctx.fillStyle="#e5e7eb"; wctx.fillText(`${m.name}`, ox, oy-8);
-
-    // map cells
-    const worldBg = backgroundGrid(m);
-    const worldPalette = backgroundPalette(m) || {};
-    if (worldBg){
-      for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-        const code = worldBg[y]?.[x];
-        const color = code ? worldPalette[code] : null;
-        if (color){
-          wctx.fillStyle = color;
-          wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
-        } else {
-          wctx.fillStyle = "#fff";
-          wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
-        }
-      }
-    } else {
-      for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-        wctx.fillStyle = "#fff";
-        wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
-      }
-    }
-
-    for (let y=0;y<m.H;y++) for (let x=0;x<m.W;x++){
-      if (m.grid[y][x]===m.chars.wall){
-        wctx.fillStyle = "#000";
-        wctx.fillRect(ox+x*tile, oy+y*tile, tile, tile);
-      }
-    }
-
-    // spawn
-    wctx.fillStyle="#1976d2";
-    wctx.fillRect(ox+m.spawn.x*tile, oy+m.spawn.y*tile, m.spawn.w*tile, m.spawn.h*tile);
-
-    // highlight hover/current
-    if (id === hoverId || id === model.current){
-      wctx.lineWidth = 2/Z;
-      wctx.strokeStyle = (id === model.current) ? "#22c55e" : "#eab308";
-      wctx.strokeRect(rect.x-2, rect.y-2, rect.w+4, rect.h+4);
-    }
-  }
-
-  wctx.restore();
-
-  if (!atlasInitialized && worldRects.length){
-    atlasInitialized = true;
-    const bounds = worldRects.reduce((acc, r)=>{
-      const minX = Math.min(acc.minX, r.x);
-      const minY = Math.min(acc.minY, r.y);
-      const maxX = Math.max(acc.maxX, r.x + r.w);
-      const maxY = Math.max(acc.maxY, r.y + r.h);
-      return { minX, minY, maxX, maxY };
-    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-    const contentW = bounds.maxX - bounds.minX;
-    const contentH = bounds.maxY - bounds.minY;
-    pan.x = (worldCv.width/2) - ((bounds.minX + contentW/2) * Z);
-    pan.y = (worldCv.height/2) - ((bounds.minY + contentH/2) * Z);
-    requestAnimationFrame(drawWorld);
-  }
-}
-
-function resizeWorld(){
-  const host = worldCv.parentElement;
-  const width = Math.max(320, Math.floor((host?.clientWidth ?? (innerWidth * 0.4)) - 4));
-  const desired = Math.round(width * 0.75);
-  const maxHeight = Math.max(240, Math.floor(window.innerHeight * 0.7));
-  const height = Math.min(maxHeight, Math.max(240, desired));
-  worldCv.width = Math.round(width);
-  worldCv.height = height;
-}
-
-function worldPoint(e){
-  const r = worldCv.getBoundingClientRect();
-  const x = (e.clientX - r.left - pan.x) / Z;
-  const y = (e.clientY - r.top  - pan.y) / Z;
-  return { x, y };
-}
-function hitTest(x,y){
-  for (let i=worldRects.length-1;i>=0;i--){
-    const r = worldRects[i];
-    if (x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h) return r;
-  }
-  return null;
-}
-
-
 
 
 function rectIsClear(m, x, y, w, h){
