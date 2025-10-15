@@ -46,8 +46,9 @@
     <button id="makeDefault">Set Default Start</button>
     <button id="saveMaps">Save Maps…</button>
     <button id="reloadMaps">Reload Maps</button>
-    <button id="renderWorld">Reset View</button>
-    <label>Zoom <input id="z" type="range" min="0.2" max="4" step="0.05" value="0.8"></label>
+  <button id="renderWorld">Reset View</button>
+  <label><input id="showGrid" type="checkbox" checked>Gridlines</label>
+  <label>Zoom <input id="z" type="range" min="0.05" max="4" step="0.02" value="0.8"></label>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -69,6 +70,7 @@
 <script>
 const atlasCv = document.getElementById('atlas'), atlasCtx = atlasCv.getContext('2d');
 const zoomInput = document.getElementById('z');
+const gridToggle = document.getElementById('showGrid');
 const resetViewBtn = document.getElementById('renderWorld');
 const mapsSel = document.getElementById('maps');
 const nameIn = document.getElementById('mapName');
@@ -776,7 +778,7 @@ window.addEventListener('DOMContentLoaded', ()=>{ loadInitialMaps(); });
 // Unified atlas editor
 const atlasState = {
   zoom: 0.8,
-  minZoom: 0.2,
+  minZoom: 0.05,
   maxZoom: 4,
   pan: { x: 120, y: 120 },
   pointerMode: null,
@@ -788,7 +790,10 @@ const atlasState = {
   baseTile: 28,
   gap: 2,
   cardPadding: 16,
-  headerHeight: 28
+  headerHeight: 28,
+  showGrid: true,
+  paintButtonMask: 1,
+  activePaintTool: null
 };
 let atlasInitialized = false;
 
@@ -1032,20 +1037,22 @@ function drawAtlas(){
       }
     }
 
-    atlasCtx.strokeStyle = gridColor;
-    atlasCtx.lineWidth = Math.max(1/atlasState.zoom, 0.5);
-    atlasCtx.beginPath();
-    for (let gx=0; gx<=map.W; gx++){
-      const px = rect.x + gx*tile;
-      atlasCtx.moveTo(px, rect.y);
-      atlasCtx.lineTo(px, rect.y + rect.h);
+    if (atlasState.showGrid){
+      atlasCtx.strokeStyle = gridColor;
+      atlasCtx.lineWidth = Math.max(1/atlasState.zoom, 0.5);
+      atlasCtx.beginPath();
+      for (let gx=0; gx<=map.W; gx++){
+        const px = rect.x + gx*tile;
+        atlasCtx.moveTo(px, rect.y);
+        atlasCtx.lineTo(px, rect.y + rect.h);
+      }
+      for (let gy=0; gy<=map.H; gy++){
+        const py = rect.y + gy*tile;
+        atlasCtx.moveTo(rect.x, py);
+        atlasCtx.lineTo(rect.x + rect.w, py);
+      }
+      atlasCtx.stroke();
     }
-    for (let gy=0; gy<=map.H; gy++){
-      const py = rect.y + gy*tile;
-      atlasCtx.moveTo(rect.x, py);
-      atlasCtx.lineTo(rect.x + rect.w, py);
-    }
-    atlasCtx.stroke();
 
     atlasCtx.fillStyle = spawnColor;
     atlasCtx.fillRect(
@@ -1114,7 +1121,7 @@ function hitTestAtlas(x,y){
   return null;
 }
 
-function applyToolAt(worldX, worldY){
+function applyToolAt(worldX, worldY, forcedTool = null){
   const hit = hitTestAtlas(worldX, worldY);
   if (!hit) return;
   let map = model.maps.get(hit.id);
@@ -1125,17 +1132,18 @@ function applyToolAt(worldX, worldY){
 
   let changed = false;
   let switched = false;
-  if (tool === 'wall'){
+  const activeTool = forcedTool ?? tool;
+  if (activeTool === 'wall'){
     if (map.grid[localY][localX] !== map.chars.wall){
       map.grid[localY][localX] = map.chars.wall;
       changed = true;
     }
-  } else if (tool === 'erase'){
+  } else if (activeTool === 'erase'){
     if (map.grid[localY][localX] !== map.chars.floor){
       map.grid[localY][localX] = map.chars.floor;
       changed = true;
     }
-  } else if (tool === 'spawn'){
+  } else if (activeTool === 'spawn'){
     if (map.spawn.x !== localX || map.spawn.y !== localY){
       map.spawn.x = localX;
       map.spawn.y = localY;
@@ -1176,31 +1184,58 @@ function endPointer(e){
   }
   atlasState.pointerMode = null;
   atlasState.pointerId = null;
+  atlasState.activePaintTool = null;
+  atlasState.paintButtonMask = 1;
   updateCursor();
 }
 
 function handlePointerDown(e){
   if (!atlasCv.contains(e.target)) return;
   const isMiddle = e.button === 1;
+  const isRight = e.button === 2;
   const isSpacePan = atlasState.spacePressed && e.button === 0;
   if (isMiddle || isSpacePan){
     beginPan(e);
     e.preventDefault();
     return;
   }
-  if (e.button !== 0) return;
 
   const pt = atlasWorldPoint(e);
   const hit = hitTestAtlas(pt.x, pt.y);
-  if (!hit) return;
+  if (isRight){
+    if (!hit) return;
+    atlasState.hoverId = hit.id;
+    if (model.current !== hit.id){
+      setCurrent(hit.id);
+    }
+    atlasState.pointerMode = 'paint';
+    atlasState.pointerId = e.pointerId;
+    atlasState.paintButtonMask = 2;
+    atlasState.activePaintTool = 'erase';
+    atlasCv.setPointerCapture(e.pointerId);
+    applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button !== 0) return;
+
+  if (!hit){
+    beginPan(e);
+    e.preventDefault();
+    return;
+  }
+
   atlasState.hoverId = hit.id;
   if (model.current !== hit.id){
     setCurrent(hit.id);
   }
   atlasState.pointerMode = 'paint';
   atlasState.pointerId = e.pointerId;
+  atlasState.paintButtonMask = 1;
+  atlasState.activePaintTool = null;
   atlasCv.setPointerCapture(e.pointerId);
-  applyToolAt(pt.x, pt.y);
+  applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
   e.preventDefault();
 }
 
@@ -1217,12 +1252,13 @@ function handlePointerMove(e){
       return;
     }
     if (atlasState.pointerMode === 'paint'){
-      if ((e.buttons & 1) === 0){
+      const mask = atlasState.paintButtonMask || 1;
+      if ((e.buttons & mask) === 0){
         endPointer(e);
         return;
       }
       const pt = atlasWorldPoint(e);
-      applyToolAt(pt.x, pt.y);
+      applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
       e.preventDefault();
       return;
     }
@@ -1296,6 +1332,7 @@ atlasCv.addEventListener('pointerleave', e=>{
   }
 });
 atlasCv.addEventListener('wheel', handleWheel, { passive:false });
+atlasCv.addEventListener('contextmenu', e=> e.preventDefault());
 
 if (zoomInput){
   zoomInput.value = atlasState.zoom.toFixed(2);
@@ -1304,6 +1341,14 @@ if (zoomInput){
     if (!Number.isFinite(next)) return;
     setZoom(next);
     atlasInitialized = true;
+  });
+}
+
+if (gridToggle){
+  atlasState.showGrid = gridToggle.checked;
+  gridToggle.addEventListener('change', e=>{
+    atlasState.showGrid = e.target.checked;
+    drawAtlas();
   });
 }
 
