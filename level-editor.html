@@ -23,7 +23,7 @@
   #workspace{flex:1;padding:12px;display:flex;box-sizing:border-box;min-height:0;}
   #workspace > section{flex:1;min-width:320px;display:flex;flex-direction:column;gap:12px;min-height:0;}
   #editorPanel{flex:1;position:relative;min-height:0;}
-  #atlas{width:100%;height:100%;display:block;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);touch-action:none;image-rendering:pixelated;border-radius:12px;cursor:crosshair;}
+  #atlas{width:100%;height:100%;display:block;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);touch-action:none;image-rendering:pixelated;border-radius:12px;cursor:grab;}
   #atlas.grab{cursor:grab;}
   #atlas.grabbing{cursor:grabbing;}
 </style>
@@ -38,9 +38,11 @@
     <label>Spawn H<input id="sh" type="number" min="1" max="8" value="2"></label>
     <button id="resize" class="primary">Resize</button>
 
-    <span class="tool" id="paintWall" title="1">Wall (#)</span>
-    <span class="tool" id="paintErase" title="2">Erase ( )</span>
-    <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
+  <span class="tool" id="paintWall" title="1">Wall (#)</span>
+  <span class="tool" id="paintErase" title="2">Erase ( )</span>
+  <span class="tool" id="paintLine" title="L">Line (L)</span>
+  <span class="tool" id="paintRect" title="R">Rect (R)</span>
+  <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
     <select id="maps"></select>
     <button id="makeDefault">Set Default Start</button>
@@ -48,6 +50,9 @@
     <button id="reloadMaps">Reload Maps</button>
   <button id="renderWorld">Reset View</button>
   <label><input id="showGrid" type="checkbox" checked>Gridlines</label>
+  <label><input id="colorMode" type="checkbox">Edit color</label>
+  <label>Color key <input id="colorKey" type="text" value="a" maxlength="2" style="width:40px"></label>
+  <label>Color <input id="colorValue" type="color" value="#ffbf47"></label>
   <label>Zoom <input id="z" type="range" min="0.05" max="4" step="0.02" value="0.8"></label>
   </div>
 
@@ -71,6 +76,9 @@
 const atlasCv = document.getElementById('atlas'), atlasCtx = atlasCv.getContext('2d');
 const zoomInput = document.getElementById('z');
 const gridToggle = document.getElementById('showGrid');
+const colorModeToggle = document.getElementById('colorMode');
+const colorKeyInput = document.getElementById('colorKey');
+const colorValueInput = document.getElementById('colorValue');
 const resetViewBtn = document.getElementById('renderWorld');
 const mapsSel = document.getElementById('maps');
 const nameIn = document.getElementById('mapName');
@@ -89,7 +97,7 @@ const edgeSel = {
   bottom: document.getElementById('edge_bottom'),
 };
 
-const tools = { wall:'paintWall', erase:'paintErase', spawn:'paintSpawn' };
+const tools = { wall:'paintWall', erase:'paintErase', line:'paintLine', rect:'paintRect', spawn:'paintSpawn' };
 let tool = 'wall';
 
 const model = {
@@ -177,6 +185,65 @@ function backgroundPalette(map){
   return map._paletteCache.entries;
 }
 
+function ensureBackgroundLayer(map){
+  if (!map.extras) map.extras = makeEmptyExtras();
+  if (!map.extras.layers || typeof map.extras.layers !== 'object') map.extras.layers = {};
+  const layer = map.extras.layers.background;
+  if (!layer || typeof layer !== 'object'){
+    map.extras.layers.background = {
+      grid: Array.from({length:map.H}, ()=>' '.repeat(map.W)).join('\n')
+    };
+  }
+  const bg = map.extras.layers.background;
+  if (typeof bg.grid !== 'string'){
+    bg.grid = Array.from({length:map.H}, ()=>' '.repeat(map.W)).join('\n');
+  }
+  return bg;
+}
+
+function ensureBackgroundPalette(map){
+  if (!map.extras) map.extras = makeEmptyExtras();
+  if (!map.extras.palette || typeof map.extras.palette !== 'object') map.extras.palette = {};
+  return map.extras.palette;
+}
+
+function backgroundGridMatrix(map){
+  ensureBackgroundLayer(map);
+  const bg = backgroundGrid(map);
+  if (bg) return bg;
+  const grid = Array.from({length:map.H}, ()=>Array.from({length:map.W}, ()=>' '));
+  map._bgCache = { key: `${map.W}x${map.H}:${grid.length}`, raw: grid.map(r=>r.join('')).join('\n'), grid };
+  map.extras.layers.background.grid = map._bgCache.raw;
+  return map._bgCache.grid;
+}
+
+function setBackgroundTile(map, x, y, code){
+  if (x<0 || y<0 || x>=map.W || y>=map.H) return false;
+  const grid = backgroundGridMatrix(map);
+  if (!grid) return false;
+  const next = code ?? ' ';
+  if (grid[y][x] === next) return false;
+  grid[y][x] = next;
+  const lines = grid.map(row=>row.join('').slice(0,map.W));
+  const serialized = lines.join('\n');
+  map.extras.layers.background.grid = serialized;
+  map._bgCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid };
+  return true;
+}
+
+function resizeBackground(map){
+  if (!map || map.W <=0 || map.H <=0) return;
+  ensureBackgroundLayer(map);
+  const grid = backgroundGridMatrix(map);
+  const newRows = Array.from({length:map.H}, (_,y)=>{
+    const row = grid[y] || [];
+    return Array.from({length:map.W}, (_,x)=> row[x] ?? ' ');
+  });
+  const serialized = newRows.map(r=>r.join('')).join('\n');
+  map.extras.layers.background.grid = serialized;
+  map._bgCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid: newRows };
+}
+
 function clearModel(){
   model.maps.clear();
   model.current = null;
@@ -216,6 +283,7 @@ function makeNewMap(){
     filename: null,
     source: null
   };
+  resizeBackground(data);
   model.maps.set(id, data);
   if (!model.defaultId){
     model.defaultId = id;
@@ -289,6 +357,7 @@ document.getElementById('resize').onclick = ()=>{
   const m=cur(); m.W=+wIn.value; m.H=+hIn.value;
   m.grid = Array.from({length:m.H}, (_,y)=>Array.from({length:m.W},(_,x)=> (m.grid[y]?.[x] ?? CH.floor)));
   m.spawn.w = +swIn.value; m.spawn.h = +shIn.value;
+  resizeBackground(m);
   syncHeader();
   syncToml();
   validateSpawn();
@@ -328,6 +397,8 @@ addEventListener('keydown', e=>{
   if (e.key === '1') setTool('wall');
   if (e.key === '2') setTool('erase');
   if (e.key === '3' || e.key.toLowerCase() === 'p') setTool('spawn');
+  if (e.key.toLowerCase() === 'l') setTool('line');
+  if (e.key.toLowerCase() === 'r') setTool('rect');
 });
 
 if (saveMapsBtn) saveMapsBtn.onclick = handleSaveMapsClick;
@@ -793,19 +864,26 @@ const atlasState = {
   headerHeight: 28,
   showGrid: true,
   paintButtonMask: 1,
-  activePaintTool: null
+  activePaintTool: null,
+  paintStart: null,
+  paintPreview: null,
+  colorMode: false,
+  activeColorKey: 'a',
+  activeColorValue: '#ffbf47'
 };
 let atlasInitialized = false;
 
 function updateCursor(){
-  const shouldGrab = atlasState.spacePressed && atlasState.pointerMode !== 'pan';
-  atlasCv.classList.toggle('grabbing', atlasState.pointerMode === 'pan');
+  const isPanning = atlasState.pointerMode === 'pan';
+  const hoveringMap = Boolean(atlasState.hoverId);
+  atlasCv.classList.toggle('grabbing', isPanning);
+  const shouldGrab = !isPanning && (!hoveringMap || atlasState.spacePressed);
   atlasCv.classList.toggle('grab', shouldGrab);
-  if (atlasState.pointerMode === 'pan') return;
-  if (atlasState.hoverId && tool !== 'spawn') {
-    atlasCv.style.cursor = 'pointer';
+  if (isPanning) return;
+  if (!hoveringMap){
+    atlasCv.style.cursor = 'grab';
   } else {
-    atlasCv.style.cursor = 'crosshair';
+    atlasCv.style.cursor = 'pointer';
   }
 }
 
@@ -1067,6 +1145,27 @@ function drawAtlas(){
       atlasCtx.strokeStyle = (id === model.current) ? '#22c55e' : '#eab308';
       atlasCtx.strokeRect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4);
     }
+
+    if (atlasState.paintPreview && atlasState.paintPreview.mapId === id){
+      const preview = atlasState.paintPreview;
+      const baseColor = atlasState.colorMode ? atlasState.activeColorValue : '#22c55e';
+      atlasCtx.save();
+      atlasCtx.globalAlpha = 0.35;
+      atlasCtx.fillStyle = baseColor;
+      if (preview.tool === 'rect'){
+        const minX = Math.min(preview.start.x, preview.end.x);
+        const minY = Math.min(preview.start.y, preview.end.y);
+        const width = Math.abs(preview.end.x - preview.start.x) + 1;
+        const height = Math.abs(preview.end.y - preview.start.y) + 1;
+        atlasCtx.fillRect(rect.x + minX * tile, rect.y + minY * tile, width * tile, height * tile);
+      } else if (preview.tool === 'line'){
+        const points = collectLinePoints(preview.start, preview.end);
+        for (const pt of points){
+          atlasCtx.fillRect(rect.x + pt.x * tile, rect.y + pt.y * tile, tile, tile);
+        }
+      }
+      atlasCtx.restore();
+    }
   }
 
   atlasCtx.restore();
@@ -1121,36 +1220,70 @@ function hitTestAtlas(x,y){
   return null;
 }
 
-function applyToolAt(worldX, worldY, forcedTool = null){
+function ensureActiveColorKey(){
+  const raw = colorKeyInput?.value ?? atlasState.activeColorKey;
+  const sanitized = sanitizeColorKey(raw) || atlasState.activeColorKey;
+  atlasState.activeColorKey = sanitized;
+  if (colorKeyInput && colorKeyInput.value !== sanitized) colorKeyInput.value = sanitized;
+}
+
+function sanitizeColorKey(value){
+  const txt = String(value ?? '').trim();
+  if (!txt) return '';
+  return txt[0];
+}
+
+function ensureActivePaletteEntry(map){
+  ensureBackgroundPalette(map);
+  ensureActiveColorKey();
+  const palette = map.extras.palette;
+  if (!palette[atlasState.activeColorKey] || palette[atlasState.activeColorKey] !== atlasState.activeColorValue){
+    palette[atlasState.activeColorKey] = atlasState.activeColorValue;
+    if (map._paletteCache) map._paletteCache = { source: palette, entries: { ...palette } };
+  }
+}
+
+function paintTile(map, localX, localY, activeTool){
+  if (!map) return false;
+  if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return false;
+  if (atlasState.colorMode){
+    ensureBackgroundLayer(map);
+    const code = (activeTool === 'erase') ? ' ' : atlasState.activeColorKey;
+    if (code !== ' '){
+      ensureActivePaletteEntry(map);
+    }
+    return setBackgroundTile(map, localX, localY, code);
+  }
+  if (activeTool === 'erase'){
+    if (map.grid[localY][localX] === map.chars.floor) return false;
+    map.grid[localY][localX] = map.chars.floor;
+    return true;
+  }
+  if (activeTool === 'wall' || activeTool === 'line' || activeTool === 'rect'){
+    if (map.grid[localY][localX] === map.chars.wall) return false;
+    map.grid[localY][localX] = map.chars.wall;
+    return true;
+  }
+  if (activeTool === 'spawn'){
+    if (map.spawn.x === localX && map.spawn.y === localY) return false;
+    map.spawn.x = localX;
+    map.spawn.y = localY;
+    return true;
+  }
+  return false;
+}
+
+function applyPointTool(worldX, worldY, forcedTool = null){
   const hit = hitTestAtlas(worldX, worldY);
   if (!hit) return;
   let map = model.maps.get(hit.id);
   if (!map) return;
   const localX = Math.floor((worldX - hit.x) / hit.tile);
   const localY = Math.floor((worldY - hit.y) / hit.tile);
-  if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return;
-
-  let changed = false;
-  let switched = false;
   const activeTool = forcedTool ?? tool;
-  if (activeTool === 'wall'){
-    if (map.grid[localY][localX] !== map.chars.wall){
-      map.grid[localY][localX] = map.chars.wall;
-      changed = true;
-    }
-  } else if (activeTool === 'erase'){
-    if (map.grid[localY][localX] !== map.chars.floor){
-      map.grid[localY][localX] = map.chars.floor;
-      changed = true;
-    }
-  } else if (activeTool === 'spawn'){
-    if (map.spawn.x !== localX || map.spawn.y !== localY){
-      map.spawn.x = localX;
-      map.spawn.y = localY;
-      changed = true;
-    }
-  }
+  if (atlasState.colorMode && activeTool === 'spawn') return;
 
+  const changed = paintTile(map, localX, localY, activeTool);
   if (!changed) return;
 
   if (model.current !== map.id){
@@ -1158,15 +1291,85 @@ function applyToolAt(worldX, worldY, forcedTool = null){
     map = cur();
     if (!map) return;
     atlasState.hoverId = map.id;
-    switched = true;
   }
 
-  if (switched) return;
-
   syncToml();
-  validateSpawn();
+  if (!atlasState.colorMode || activeTool === 'spawn'){
+    validateSpawn();
+  }
   runLint();
   drawAtlas();
+}
+
+function collectLinePoints(start, end){
+  const points = [];
+  let x0 = start.x;
+  let y0 = start.y;
+  let x1 = end.x;
+  let y1 = end.y;
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  while (true){
+    points.push({ x: x0, y: y0 });
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = err * 2;
+    if (e2 > -dy){ err -= dy; x0 += sx; }
+    if (e2 < dx){ err += dx; y0 += sy; }
+  }
+  return points;
+}
+
+function paintLineBetween(map, start, end, activeTool){
+  const points = collectLinePoints(start, end);
+  let changed = false;
+  if (atlasState.colorMode && activeTool === 'line') ensureActivePaletteEntry(map);
+  for (const pt of points){
+    changed = paintTile(map, pt.x, pt.y, atlasState.colorMode ? activeTool : 'line') || changed;
+  }
+  return changed;
+}
+
+function paintRectArea(map, start, end, activeTool){
+  const minX = Math.min(start.x, end.x);
+  const minY = Math.min(start.y, end.y);
+  const maxX = Math.max(start.x, end.x);
+  const maxY = Math.max(start.y, end.y);
+  let changed = false;
+  if (atlasState.colorMode && activeTool === 'rect') ensureActivePaletteEntry(map);
+  for (let y=minY; y<=maxY; y++){
+    for (let x=minX; x<=maxX; x++){
+      changed = paintTile(map, x, y, atlasState.colorMode ? activeTool : 'rect') || changed;
+    }
+  }
+  return changed;
+}
+
+function commitShape(mapId, activeTool, start, end){
+  const map = model.maps.get(mapId);
+  if (!map) return false;
+  if (!start || !end) return false;
+  if (atlasState.colorMode && activeTool === 'spawn') return false;
+  let changed = false;
+  if (activeTool === 'line'){
+    changed = paintLineBetween(map, start, end, activeTool);
+  } else if (activeTool === 'rect'){
+    changed = paintRectArea(map, start, end, activeTool);
+  }
+  if (!changed) return false;
+
+  if (model.current !== map.id){
+    setCurrent(map.id);
+    atlasState.hoverId = map.id;
+  }
+
+  syncToml();
+  if (!atlasState.colorMode) validateSpawn();
+  runLint();
+  drawAtlas();
+  return true;
 }
 
 function beginPan(e){
@@ -1182,11 +1385,15 @@ function endPointer(e){
   if (atlasState.pointerId !== null){
     try { atlasCv.releasePointerCapture(atlasState.pointerId); } catch {}
   }
+  const hadPreview = Boolean(atlasState.paintPreview);
   atlasState.pointerMode = null;
   atlasState.pointerId = null;
   atlasState.activePaintTool = null;
   atlasState.paintButtonMask = 1;
+  atlasState.paintStart = null;
+  atlasState.paintPreview = null;
   updateCursor();
+  if (hadPreview) drawAtlas();
 }
 
 function handlePointerDown(e){
@@ -1213,7 +1420,7 @@ function handlePointerDown(e){
     atlasState.paintButtonMask = 2;
     atlasState.activePaintTool = 'erase';
     atlasCv.setPointerCapture(e.pointerId);
-    applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
+    applyPointTool(pt.x, pt.y, atlasState.activePaintTool);
     e.preventDefault();
     return;
   }
@@ -1230,12 +1437,27 @@ function handlePointerDown(e){
   if (model.current !== hit.id){
     setCurrent(hit.id);
   }
+  const localX = Math.floor((pt.x - hit.x) / hit.tile);
+  const localY = Math.floor((pt.y - hit.y) / hit.tile);
+  const activeTool = tool;
+  if (activeTool === 'line' || activeTool === 'rect'){
+    atlasState.pointerMode = 'shape';
+    atlasState.paintStart = { mapId: hit.id, x: localX, y: localY };
+    atlasState.paintPreview = { mapId: hit.id, tool: activeTool, start: { x: localX, y: localY }, end: { x: localX, y: localY } };
+    atlasState.pointerId = e.pointerId;
+    atlasState.paintButtonMask = 1;
+    atlasState.activePaintTool = activeTool;
+    atlasCv.setPointerCapture(e.pointerId);
+    drawAtlas();
+    e.preventDefault();
+    return;
+  }
   atlasState.pointerMode = 'paint';
   atlasState.pointerId = e.pointerId;
   atlasState.paintButtonMask = 1;
   atlasState.activePaintTool = null;
   atlasCv.setPointerCapture(e.pointerId);
-  applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
+  applyPointTool(pt.x, pt.y, atlasState.activePaintTool);
   e.preventDefault();
 }
 
@@ -1251,6 +1473,31 @@ function handlePointerMove(e){
       e.preventDefault();
       return;
     }
+    if (atlasState.pointerMode === 'shape'){
+      const mask = atlasState.paintButtonMask || 1;
+      if ((e.buttons & mask) === 0){
+        endPointer(e);
+        return;
+      }
+      const pt = atlasWorldPoint(e);
+      const hit = hitTestAtlas(pt.x, pt.y);
+      if (!hit || hit.id !== atlasState.paintStart?.mapId){
+        atlasState.paintPreview = null;
+        drawAtlas();
+        return;
+      }
+      const localX = Math.floor((pt.x - hit.x) / hit.tile);
+      const localY = Math.floor((pt.y - hit.y) / hit.tile);
+      atlasState.paintPreview = {
+        mapId: hit.id,
+        tool: atlasState.activePaintTool,
+        start: { ...atlasState.paintStart },
+        end: { x: localX, y: localY }
+      };
+      drawAtlas();
+      e.preventDefault();
+      return;
+    }
     if (atlasState.pointerMode === 'paint'){
       const mask = atlasState.paintButtonMask || 1;
       if ((e.buttons & mask) === 0){
@@ -1258,7 +1505,7 @@ function handlePointerMove(e){
         return;
       }
       const pt = atlasWorldPoint(e);
-      applyToolAt(pt.x, pt.y, atlasState.activePaintTool);
+      applyPointTool(pt.x, pt.y, atlasState.activePaintTool);
       e.preventDefault();
       return;
     }
@@ -1278,6 +1525,10 @@ function handlePointerMove(e){
 
 function handlePointerUp(e){
   if (atlasState.pointerId === e.pointerId){
+    if (atlasState.pointerMode === 'shape' && atlasState.paintPreview){
+      const preview = atlasState.paintPreview;
+      commitShape(preview.mapId, preview.tool, preview.start, preview.end);
+    }
     endPointer(e);
   }
 }
@@ -1349,6 +1600,31 @@ if (gridToggle){
   gridToggle.addEventListener('change', e=>{
     atlasState.showGrid = e.target.checked;
     drawAtlas();
+  });
+}
+
+if (colorModeToggle){
+  atlasState.colorMode = colorModeToggle.checked;
+  colorModeToggle.addEventListener('change', e=>{
+    atlasState.colorMode = e.target.checked;
+    atlasState.paintPreview = null;
+    drawAtlas();
+  });
+}
+
+if (colorValueInput){
+  atlasState.activeColorValue = colorValueInput.value || atlasState.activeColorValue;
+  colorValueInput.addEventListener('input', e=>{
+    atlasState.activeColorValue = e.target.value || '#ffffff';
+  });
+}
+
+if (colorKeyInput){
+  ensureActiveColorKey();
+  colorKeyInput.addEventListener('input', e=>{
+    const sanitized = sanitizeColorKey(e.target.value) || atlasState.activeColorKey;
+    atlasState.activeColorKey = sanitized;
+    if (e.target.value !== sanitized) e.target.value = sanitized;
   });
 }
 
@@ -1560,7 +1836,7 @@ function fromToml(txt, meta = {}){
     return Array.from({length:W}, (_,x)=> padded[x] ?? (t.tiles?.floor ?? ' '));
   });
   const extras = cloneExtrasFromToml(t);
-  return {
+  const map = {
     id: t.id, name: t.name || t.id.slice(0,8),
     W, H, grid,
     spawn: { x: t.spawn.x, y: t.spawn.y, w: t.spawn.w, h: t.spawn.h },
@@ -1570,6 +1846,8 @@ function fromToml(txt, meta = {}){
     filename: meta.filename ?? null,
     source: meta.source ?? null
   };
+  resizeBackground(map);
+  return map;
 }
 
 function parseTOML(src){
