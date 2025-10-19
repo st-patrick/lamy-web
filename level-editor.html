@@ -102,6 +102,16 @@ const reloadMapsBtn = document.getElementById('reloadMaps');
 const setDefaultBtn = document.getElementById('makeDefault');
 let currentToml = '';
 
+const EDITOR_PREF_KEY = 'lamy.editor.v1';
+const storedEditorPrefs = loadEditorPrefs();
+let editorPrefsSaveTimer = null;
+let preferredMapId = storedEditorPrefs?.currentMap ?? null;
+const hasStoredViewport = Boolean(
+  storedEditorPrefs && Number.isFinite(storedEditorPrefs.zoom)
+  && storedEditorPrefs.pan && Number.isFinite(storedEditorPrefs.pan.x)
+  && Number.isFinite(storedEditorPrefs.pan.y)
+);
+
 const edgeSel = {
   left: document.getElementById('edge_left'),
   right: document.getElementById('edge_right'),
@@ -111,6 +121,9 @@ const edgeSel = {
 
 const tools = { line:'paintLine', rect:'paintRect', spawn:'paintSpawn' };
 let tool = 'brush';
+if (storedEditorPrefs && typeof storedEditorPrefs.tool === 'string'){
+  tool = storedEditorPrefs.tool;
+}
 
 const model = {
   maps: new Map(), // id -> {id,name,W,H,grid,spawn:{x,y,w,h}, exits:{left?,right?,top?,bottom?}, chars:{wall,floor}}
@@ -320,6 +333,7 @@ function appendColorChip(container, key){
     if (colorValueInput) colorValueInput.value = color;
     renderPaletteButtons();
     drawAtlas();
+    scheduleEditorPrefsSave();
   });
   container.appendChild(btn);
 }
@@ -423,6 +437,10 @@ function clearModel(){
   warn.textContent = '';
   warn.style.display = 'none';
   warn.classList.remove('ok');
+  if (warn.dataset){
+    warn.dataset.lint = '';
+    warn.dataset.spawn = '';
+  }
   if (atlasCtx){
     atlasCtx.setTransform(1,0,0,1,0,0);
     atlasCtx.clearRect(0, 0, atlasCv.width, atlasCv.height);
@@ -466,6 +484,8 @@ function makeNewMap(){
 }
 function setCurrent(id){
   model.current = id;
+  preferredMapId = id || null;
+  scheduleEditorPrefsSave();
   if (!model.defaultId || !model.maps.has(model.defaultId)){
     model.defaultId = id;
     const currentMap = model.maps.get(id);
@@ -793,7 +813,13 @@ async function handleReloadMapsClick(){
     if (handle){
       clearModel();
       const loaded = await loadFromDirectory(handle);
-      const nextId = (previousId && model.maps.has(previousId)) ? previousId : model.maps.keys().next().value;
+      let nextId = null;
+      if (preferredMapId && model.maps.has(preferredMapId)) nextId = preferredMapId;
+      else if (previousId && model.maps.has(previousId)) nextId = previousId;
+      else {
+        const first = model.maps.keys().next().value;
+        if (first) nextId = first;
+      }
       if (nextId) setCurrent(nextId);
       else model.current = null;
       showNotification(`Reloaded ${loaded} map${loaded===1?'':'s'} from folder.`);
@@ -994,7 +1020,10 @@ async function loadInitialMaps(){
   resolveDefaultAfterLoad();
   console.log('[Editor] Loaded maps from manifest:', Array.from(model.maps.entries()).map(([id, m])=>`${m.name} (${id})`));
   if (found > 0){
-    const target = (model.current && model.maps.has(model.current)) ? model.current : model.defaultId;
+    let target = null;
+    if (preferredMapId && model.maps.has(preferredMapId)) target = preferredMapId;
+    else if (model.current && model.maps.has(model.current)) target = model.current;
+    else target = model.defaultId;
     if (target) setCurrent(target);
   }
   if (!model.current) makeNewMap(); // fallback blank
@@ -1033,6 +1062,32 @@ const atlasState = {
   pendingColorValue: '#ffbf47'
 };
 let atlasInitialized = false;
+let shouldAutoCenter = !hasStoredViewport;
+
+if (storedEditorPrefs){
+  if (Number.isFinite(storedEditorPrefs.zoom)){
+    const nextZoom = Math.min(atlasState.maxZoom, Math.max(atlasState.minZoom, storedEditorPrefs.zoom));
+    atlasState.zoom = nextZoom;
+  }
+  if (storedEditorPrefs.pan && Number.isFinite(storedEditorPrefs.pan.x) && Number.isFinite(storedEditorPrefs.pan.y)){
+    atlasState.pan.x = storedEditorPrefs.pan.x;
+    atlasState.pan.y = storedEditorPrefs.pan.y;
+  }
+  if (typeof storedEditorPrefs.showGrid === 'boolean'){
+    atlasState.showGrid = storedEditorPrefs.showGrid;
+    if (gridToggle) gridToggle.checked = storedEditorPrefs.showGrid;
+  }
+  if (typeof storedEditorPrefs.colorMode === 'boolean'){
+    atlasState.colorMode = storedEditorPrefs.colorMode;
+    if (colorModeToggle) colorModeToggle.checked = storedEditorPrefs.colorMode;
+  }
+  if (typeof storedEditorPrefs.activeColorKey === 'string'){
+    atlasState.activeColorKey = storedEditorPrefs.activeColorKey;
+  }
+  if (typeof storedEditorPrefs.pendingColorValue === 'string'){
+    atlasState.pendingColorValue = storedEditorPrefs.pendingColorValue;
+  }
+}
 
 function updateCursor(){
   const isPanning = atlasState.pointerMode === 'pan';
@@ -1055,12 +1110,13 @@ function setTool(t){
     if (el) el.classList.toggle('active', k===t);
   }
   updateCursor();
+  scheduleEditorPrefsSave();
 }
 for (const [k,id] of Object.entries(tools)){
   const el = document.getElementById(id);
   if (el) el.onclick = ()=> setTool(tool === k ? 'brush' : k);
 }
-setTool('brush');
+setTool(tool);
 
 function resizeAtlasCanvas(){
   const rect = atlasCv.getBoundingClientRect();
@@ -1340,8 +1396,12 @@ function drawAtlas(){
   atlasCtx.restore();
 
   if (!atlasInitialized && atlasState.worldRects.length){
-    centerAtlasOnContent();
+    if (shouldAutoCenter){
+      centerAtlasOnContent();
+      scheduleEditorPrefsSave();
+    }
     atlasInitialized = true;
+    shouldAutoCenter = false;
     requestAnimationFrame(drawAtlas);
   }
 }
@@ -1391,18 +1451,22 @@ function hitTestAtlas(x,y){
 
 function ensureActiveColorKey(){
   ensurePaletteSeed();
+  const prevKey = atlasState.activeColorKey;
   if (atlasState.activeColorKey && model.palette.has(atlasState.activeColorKey)){
     atlasState.activeColorValue = model.palette.get(atlasState.activeColorKey);
-    return;
+  } else {
+    const first = model.palette.keys().next().value;
+    if (first){
+      atlasState.activeColorKey = first;
+      atlasState.activeColorValue = model.palette.get(first);
+    } else {
+      atlasState.activeColorKey = 'a';
+      atlasState.activeColorValue = '#ffbf47';
+    }
   }
-  const first = model.palette.keys().next().value;
-  if (first){
-    atlasState.activeColorKey = first;
-    atlasState.activeColorValue = model.palette.get(first);
-    return;
+  if (atlasState.activeColorKey !== prevKey){
+    scheduleEditorPrefsSave();
   }
-  atlasState.activeColorKey = 'a';
-  atlasState.activeColorValue = '#ffbf47';
 }
 
 function ensureActivePaletteEntry(map){
@@ -1701,6 +1765,7 @@ function handlePointerMove(e){
       atlasState.pan.y += dy;
       atlasState.last = { x: e.clientX, y: e.clientY };
       drawAtlas();
+      scheduleEditorPrefsSave();
       e.preventDefault();
       return;
     }
@@ -1787,6 +1852,7 @@ function setZoom(nextZoom, pivot){
   atlasState.pan.y = screen.y - world.y * clamped;
   if (zoomInput) zoomInput.value = clamped.toFixed(2);
   drawAtlas();
+  scheduleEditorPrefsSave();
 }
 
 function handleWheel(e){
@@ -1799,6 +1865,7 @@ function handleWheel(e){
 }
 
 function resetAtlasView(){
+  shouldAutoCenter = true;
   atlasInitialized = false;
   drawAtlas();
 }
@@ -1828,27 +1895,33 @@ if (zoomInput){
 }
 
 if (gridToggle){
+  gridToggle.checked = !!atlasState.showGrid;
   atlasState.showGrid = gridToggle.checked;
   gridToggle.addEventListener('change', e=>{
     atlasState.showGrid = e.target.checked;
     drawAtlas();
+    scheduleEditorPrefsSave();
   });
 }
 
 if (colorModeToggle){
+  colorModeToggle.checked = !!atlasState.colorMode;
   atlasState.colorMode = colorModeToggle.checked;
   colorModeToggle.addEventListener('change', e=>{
     atlasState.colorMode = e.target.checked;
     atlasState.paintPreview = null;
     renderPaletteButtons();
     drawAtlas();
+    scheduleEditorPrefsSave();
   });
 }
 
 if (colorValueInput){
+  colorValueInput.value = atlasState.pendingColorValue;
   atlasState.pendingColorValue = colorValueInput.value || atlasState.pendingColorValue;
   colorValueInput.addEventListener('input', e=>{
     atlasState.pendingColorValue = e.target.value || '#ffffff';
+    scheduleEditorPrefsSave();
   });
 }
 
@@ -1874,6 +1947,7 @@ if (addColorBtn){
     }
     renderPaletteButtons();
     drawAtlas();
+    scheduleEditorPrefsSave();
   });
 }
 
@@ -1912,10 +1986,20 @@ addEventListener('resize', ()=>{
 
 // Spawn validation
 function validateSpawn(){
+  if (!warn) return;
   const m = cur();
   const ok = rectIsClear(m, m.spawn.x, m.spawn.y, m.spawn.w, m.spawn.h);
-  warn.style.display = ok ? 'none' : 'block';
-  warn.textContent = ok ? '' : 'Spawn overlaps walls: ensure a clear area of size Spawn W×H.';
+  if (warn.dataset){
+    warn.dataset.spawn = ok ? '' : '1';
+  }
+  if (!ok){
+    warn.classList.remove('ok');
+    warn.style.display = 'block';
+    warn.textContent = 'Spawn overlaps walls: ensure a clear area of size Spawn W×H.';
+  } else if (!warn.dataset || !warn.dataset.lint){
+    warn.style.display = 'none';
+    warn.textContent = '';
+  }
 }
 
 // Header / selects
@@ -2109,6 +2193,45 @@ function fromToml(txt, meta = {}){
   return map;
 }
 
+function loadEditorPrefs(){
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(EDITOR_PREF_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (err) {
+    console.warn('Failed to load editor prefs', err);
+    return {};
+  }
+}
+
+function scheduleEditorPrefsSave(){
+  if (editorPrefsSaveTimer){
+    clearTimeout(editorPrefsSaveTimer);
+  }
+  editorPrefsSaveTimer = setTimeout(saveEditorPrefs, 250);
+}
+
+function saveEditorPrefs(){
+  if (typeof localStorage === 'undefined') return;
+  const payload = {
+    zoom: atlasState.zoom,
+    pan: { x: atlasState.pan.x, y: atlasState.pan.y },
+    showGrid: atlasState.showGrid,
+    colorMode: atlasState.colorMode,
+    activeColorKey: atlasState.activeColorKey,
+    pendingColorValue: atlasState.pendingColorValue,
+    tool,
+    currentMap: (model.current && model.maps.has(model.current)) ? model.current : null
+  };
+  try {
+    localStorage.setItem(EDITOR_PREF_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn('Failed to save editor prefs', err);
+  }
+}
+
 function parseTOML(src){
   const out = {};
   let ctx = out;
@@ -2238,6 +2361,7 @@ function parseTOML(src){
 
 // Lint: dangling and conflicts
 function runLint(){
+  if (!warn) return;
   const problems = [];
   // clear styles
   for (const s of Object.values(edgeSel)) s.classList.remove('bad');
@@ -2263,13 +2387,18 @@ function runLint(){
   }
 
   if (problems.length){
+    if (warn.dataset) warn.dataset.lint = '1';
     warn.classList.remove('ok');
     warn.style.display = 'block';
     warn.textContent = problems.join("\n");
   } else {
-    warn.classList.add('ok');
-    warn.style.display = 'block';
-    warn.textContent = '✓ No link issues';
+    if (warn.dataset) warn.dataset.lint = '';
+    if (warn.dataset && warn.dataset.spawn){
+      return;
+    }
+    warn.classList.remove('ok');
+    warn.style.display = 'none';
+    warn.textContent = '';
   }
 }
 
