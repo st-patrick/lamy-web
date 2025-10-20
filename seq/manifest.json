@@ -1,0 +1,55 @@
+[
+    {
+        "id": "dreamsequence_001",
+        "frames": [
+            {
+                "i": null,
+                "t": [
+                    "…silence.",
+                    "Thunder waits behind the clouds."
+                ]
+            },
+            {
+                "i": "seq/001_nightmare_rain_and_thunder/01_rain_and_thunder.png",
+                "t": [
+                    "A rainy night.",
+                    "Thunder walks the rooftops."
+                ]
+            },
+            {
+                "i": "seq/001_nightmare_rain_and_thunder/02_silhouette_in_streets.png",
+                "t": [
+                    "A dark silhouette wanders the streets.",
+                    "It thirsts for danger."
+                ]
+            },
+            {
+                "i": "seq/001_nightmare_rain_and_thunder/03_silhouette_in_streets_again.png",
+                "t": [
+                    "Footsteps stitch the rain.",
+                    "Your name dissolves in the gutter."
+                ]
+            },
+            {
+                "i": "seq/001_nightmare_rain_and_thunder/04_rain_puddles_reflection.png",
+                "t": [
+                    "drip… drop…",
+                    "drip… drop…"
+                ]
+            },            
+            {
+                "i": "seq/001_nightmare_rain_and_thunder/05_room_wake_up.png",
+                "t": [
+                    "You wake to rain on the roof.",
+                    "Night presses at the window."
+                ]
+            },
+            {
+                "i": null,
+                "t": [
+                    "The wind remembers your name."
+                ]
+            }
+        ]
+    }
+]
