@@ -54,11 +54,15 @@ export function parseTomlLevel(tomlText){
     bottom: t.exits?.bottom ?? null,
   };
 
+  const story = {
+    onLoadSequence: typeof t.story?.on_load_sequence === "string" ? t.story.on_load_sequence : null
+  };
+
   const SOLID = new Set([chars.wall]);
   const isSolid = c => SOLID.has(c);
   const at = (x,y) => grid[y]?.[x] ?? chars.wall; // OOB acts as wall
 
-  return { id, name, w, h, grid, chars, spawn, exits, palette, background, isSolid, at };
+  return { id, name, w, h, grid, chars, spawn, exits, palette, background, isSolid, at, story };
 }
 
 export function rectIsClear(level, x, y, w, h){

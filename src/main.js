@@ -4,6 +4,7 @@ import { createPlayer, updatePlayer } from "./actors/player.js";
 import { createRenderer } from "./view/render.js";
 import { loadAtlasFromTomls } from "./world/atlas.js";
 import { rectIsClear } from "./world/level.js";
+import { maybePlaySequence, isSequenceActive } from "./game/sequences.js";
 
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
 
@@ -55,6 +56,8 @@ async function boot(){
   render = createRenderer(canvas, level);
   fitToWindowHeight();
   startLoop(update, draw);
+
+  maybePlaySequence(level.story?.onLoadSequence)?.catch(err => console.warn("Sequence error", err));
 
   fitBtn.onclick = ()=> fitToWindowHeight();
   zoomInBtn.onclick = ()=> setScale(render.getScale() + stepScale());
@@ -124,6 +127,7 @@ function reportBootIssue(message){
 }
 
 function update(dt){
+  if (isSequenceActive()) return;
   const before = { x: player.x, y: player.y };
   updatePlayer(player, input.state, dt, level);
 
@@ -155,6 +159,7 @@ function switchMap(targetId, viaSide, prevPos){
   else if (viaSide === "bottom"){ player.y = 0.05;                        player.x = clamp(ratioX * level.w - player.w/2, 0, level.w - player.w); }
 
   currentId = level.id;
+  maybePlaySequence(level.story?.onLoadSequence)?.catch(err => console.warn("Sequence error", err));
 }
 
 function draw(){ render({ player, level }); }
