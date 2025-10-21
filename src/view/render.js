@@ -1,12 +1,11 @@
-const LIGHT_DEFAULT = { wall:"#000", floor:"#fff", player:"#1976d2" };
-const DARK_DEFAULT  = { wall:"#000", floor:"#526383ff", player:"#9dc9f5ff" };
+const LIGHT_DEFAULT = { wall:"#20242b", floor:"#f5f6f9", player:"#1976d2" };
+const DARK_DEFAULT  = { wall:"#d5d9e1", floor:"#1f242d", player:"#145ca3" };
 
 export function createRenderer(canvas, level, config) {
-  const opts = normalizeOptions(config);
-  const palette = opts.palette;
-  const useDarkMode = opts.mode === "dark";
-  const shadeFactor = useDarkMode ? opts.backgroundShade : 1;
-  const bgCache = new Map();
+  let options = normalizeOptions(config);
+  let palette = options.palette;
+  let shadeFactor = options.backgroundShade;
+  let bgCache = new Map();
 
   let s = 12; // pixels per tile; main.js adjusts via auto-fit
   const ctx = canvas.getContext("2d", { alpha:false });
@@ -19,7 +18,7 @@ export function createRenderer(canvas, level, config) {
   }
   resize();
 
-  function render(state){
+  function render(state = {}){
     ctx.fillStyle = palette.floor;
     ctx.fillRect(0,0,canvas.width,canvas.height);
 
@@ -48,12 +47,25 @@ export function createRenderer(canvas, level, config) {
     }
 
     const p = state.player;
-    ctx.fillStyle = palette.player;
-    ctx.fillRect(p.x*s, p.y*s, p.w*s, p.h*s);
+    if (p){
+      ctx.fillStyle = palette.player;
+      ctx.fillRect(p.x*s, p.y*s, p.w*s, p.h*s);
+    }
+
+    if (state.weather && typeof state.weather.render === "function"){
+      state.weather.render(ctx, canvas, s, level);
+    }
   }
 
   render.setScale = (next)=>{ s = Math.max(2, Math.floor(next)); resize(); };
   render.getScale = ()=> s;
+  render.setOptions = (nextConfig)=>{
+    options = normalizeOptions(nextConfig);
+    palette = options.palette;
+    shadeFactor = options.backgroundShade;
+    bgCache = new Map();
+  };
+  render.getOptions = ()=> ({ ...options, palette: { ...palette } });
 
   return render;
 }
@@ -68,7 +80,9 @@ function normalizeOptions(config){
   }
   const mode = config?.mode ?? "dark";
   const paletteOverride = config?.palette ?? {};
-  const backgroundShade = typeof config?.backgroundShade === "number" ? config.backgroundShade : 0.78;
+  const backgroundShade = typeof config?.backgroundShade === "number"
+    ? config.backgroundShade
+    : (mode === "dark" ? 0.78 : 1);
   const defaults = mode === "dark" ? DARK_DEFAULT : LIGHT_DEFAULT;
   return {
     mode,

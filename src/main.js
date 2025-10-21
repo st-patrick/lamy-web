@@ -2,11 +2,15 @@ import { startLoop } from "./engine/loop.js";
 import { createInput } from "./engine/input.js";
 import { createPlayer, updatePlayer } from "./actors/player.js";
 import { createRenderer } from "./view/render.js";
+import { createWeatherSystem } from "./view/weather.js";
 import { loadAtlasFromTomls } from "./world/atlas.js";
 import { rectIsClear } from "./world/level.js";
 import { maybePlaySequence, isSequenceActive } from "./game/sequences.js";
 
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
+const DISPLAY_MODE_KEY = "lamy.displayMode";
+const weather = createWeatherSystem();
+let renderMode = loadDisplayMode();
 
 const canvas = document.getElementById("game");
 const bootStatus = document.getElementById("bootStatus");
@@ -15,6 +19,17 @@ const zoomInBtn = document.getElementById("zoomIn");
 const zoomOutBtn = document.getElementById("zoomOut");
 const zoomLabel = document.getElementById("zoomLabel");
 const fullBtn = document.getElementById("full");
+const modeToggle = document.getElementById("modeToggle");
+const rainToggle = document.getElementById("rainToggle");
+const thunderToggle = document.getElementById("thunderToggle");
+const lightingToggle = document.getElementById("lightingToggle");
+const lightingControls = document.getElementById("lightingControls");
+const lightingAngle = document.getElementById("lightingAngle");
+const lightingAngleValue = document.getElementById("lightingAngleValue");
+const shadowLength = document.getElementById("shadowLength");
+const shadowLengthValue = document.getElementById("shadowLengthValue");
+const lightingAngleLabel = document.getElementById("lightingAngleLabel");
+const shadowLengthLabel = document.getElementById("shadowLengthLabel");
 
 boot();
 
@@ -53,8 +68,9 @@ async function boot(){
 
   player = createPlayer(level.spawn);
   input  = createInput();
-  render = createRenderer(canvas, level);
+  render = createRenderer(canvas, level, { mode: renderMode });
   fitToWindowHeight();
+  weather.setLevel(level);
   startLoop(update, draw);
 
   maybePlaySequence(level.story?.onLoadSequence)?.catch(err => console.warn("Sequence error", err));
@@ -63,6 +79,61 @@ async function boot(){
   zoomInBtn.onclick = ()=> setScale(render.getScale() + stepScale());
   zoomOutBtn.onclick = ()=> setScale(render.getScale() - stepScale());
   fullBtn.onclick = toggleFullscreen;
+
+  if (modeToggle){
+    modeToggle.addEventListener("click", ()=>{
+      renderMode = renderMode === "dark" ? "light" : "dark";
+      saveDisplayMode(renderMode);
+      if (render) render.setOptions({ mode: renderMode });
+      updateModeButton();
+    });
+  }
+  if (rainToggle){
+    rainToggle.addEventListener("click", ()=>{
+      weather.toggleRain();
+      updateWeatherButtons();
+    });
+  }
+  if (thunderToggle){
+    thunderToggle.addEventListener("click", ()=>{
+      const enabled = weather.toggleThunder();
+      if (enabled && !weather.isLightingEnabled()){
+        weather.setLightingEnabled(true);
+      }
+      if (level) weather.setLevel(level);
+      updateWeatherButtons();
+    });
+  }
+  if (lightingToggle){
+    lightingToggle.addEventListener("click", e=>{
+      if (e.shiftKey || e.altKey){
+        weather.cycleLightingDirection();
+      } else {
+        weather.toggleLighting();
+      }
+      if (level) weather.setLevel(level);
+      updateWeatherButtons();
+    });
+  }
+  if (lightingAngle){
+    lightingAngle.addEventListener("input", ()=>{
+      const angle = Number(lightingAngle.value) || 0;
+      weather.setLightingAngle(angle);
+      if (level) weather.setLevel(level);
+      updateWeatherButtons();
+    });
+  }
+  if (shadowLength){
+    shadowLength.addEventListener("input", ()=>{
+      const depth = Number(shadowLength.value) || 0;
+      weather.setShadowLength(depth);
+      if (level) weather.setLevel(level);
+      updateWeatherButtons();
+    });
+  }
+
+  updateModeButton();
+  updateWeatherButtons();
 
   window.addEventListener("resize", fitToWindowHeight);
   document.addEventListener("fullscreenchange", fitToWindowHeight);
@@ -127,6 +198,7 @@ function reportBootIssue(message){
 }
 
 function update(dt){
+  weather.update(dt);
   if (isSequenceActive()) return;
   const before = { x: player.x, y: player.y };
   updatePlayer(player, input.state, dt, level);
@@ -147,8 +219,10 @@ function switchMap(targetId, viaSide, prevPos){
   if (!node){ console.warn("Missing target map: " + targetId); return; }
 
   level = node.level;
-  render = createRenderer(canvas, level);
+  render = createRenderer(canvas, level, { mode: renderMode });
   fitToWindowHeight();
+  weather.setLevel(level);
+  updateWeatherButtons();
 
   const ratioX = (prevPos.x + player.w/2) / Math.max(1, atlas[currentId].level.w);
   const ratioY = (prevPos.y + player.h/2) / Math.max(1, atlas[currentId].level.h);
@@ -162,7 +236,7 @@ function switchMap(targetId, viaSide, prevPos){
   maybePlaySequence(level.story?.onLoadSequence)?.catch(err => console.warn("Sequence error", err));
 }
 
-function draw(){ render({ player, level }); }
+function draw(){ render({ player, level, weather }); }
 
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
@@ -182,4 +256,77 @@ async function toggleFullscreen(){
   const root = document.documentElement;
   if (!document.fullscreenElement) await root.requestFullscreen().catch(()=>{});
   else await document.exitFullscreen().catch(()=>{});
+}
+
+function updateModeButton(){
+  if (!modeToggle) return;
+  modeToggle.textContent = renderMode === "dark" ? "Night Mode" : "Day Mode";
+  modeToggle.classList.toggle("active", renderMode === "dark");
+}
+
+function updateWeatherButtons(){
+  if (rainToggle){
+    rainToggle.classList.toggle("active", weather.isRainEnabled());
+  }
+  if (thunderToggle){
+    thunderToggle.classList.toggle("active", weather.isThunderEnabled());
+  }
+  if (lightingToggle){
+    const enabled = weather.isLightingEnabled();
+    lightingToggle.classList.toggle("active", enabled);
+    const symbol = weather.getLightingSymbol();
+    lightingToggle.textContent = enabled ? `Shadow ${symbol}` : "Shadow";
+    lightingToggle.title = enabled
+      ? `Storm shadows (${symbol}) · Shift+Click to cycle direction`
+      : "Toggle storm shadows · Shift+Click to cycle direction";
+  }
+  if (lightingControls){
+    const enabled = weather.isLightingEnabled();
+    lightingControls.classList.toggle("disabled", !enabled);
+    lightingControls.setAttribute("aria-disabled", enabled ? "false" : "true");
+    updateLightingSlider(lightingAngle, lightingAngleValue, lightingAngleLabel, enabled, `${Math.round(weather.getLightingAngle())}deg`);
+    updateLightingSlider(shadowLength, shadowLengthValue, shadowLengthLabel, enabled, formatShadowLength(weather.getShadowLength()));
+  }
+}
+
+function updateLightingSlider(inputEl, valueEl, labelEl, enabled, displayValue){
+  if (!inputEl) return;
+  inputEl.disabled = !enabled;
+  if (typeof displayValue === "string" && valueEl){
+    valueEl.textContent = displayValue;
+  }
+  if (labelEl){
+    labelEl.classList.toggle("disabled", !enabled);
+  }
+  if (inputEl === lightingAngle){
+    const angle = Math.round(weather.getLightingAngle());
+    inputEl.value = String(angle);
+  } else if (inputEl === shadowLength){
+    const depth = Math.round(weather.getShadowLength() * 2) / 2;
+    inputEl.value = depth.toString();
+  }
+}
+
+function formatShadowLength(value){
+  const clamped = Math.max(0, value);
+  return `${clamped.toFixed(1)}x`;
+}
+
+function loadDisplayMode(){
+  try {
+    const stored = localStorage.getItem(DISPLAY_MODE_KEY);
+    return stored === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function saveDisplayMode(mode){
+  try {
+    localStorage.setItem(DISPLAY_MODE_KEY, mode);
+  } catch {}
+}
+
+if (typeof window !== "undefined"){
+  window.lamyWeather = weather;
 }

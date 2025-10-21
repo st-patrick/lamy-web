@@ -7,9 +7,17 @@
   <style>
     html,body{height:100%;margin:0;background:#fff;font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial}
     #wrap{display:grid;grid-template-rows:auto 1fr;gap:8px;min-height:100%}
-    header{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:1}
+    header{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:1;flex-wrap:wrap}
     button{padding:6px 10px;border-radius:8px;border:1px solid #c7d0d9;background:#fff;cursor:pointer}
     .spacer{flex:1}
+    button.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+    button.active:focus-visible{outline:2px solid #0ea5e9;outline-offset:2px}
+    .lighting-controls{display:flex;align-items:center;gap:10px;padding-left:10px;border-left:1px solid #d8e0ea;margin-left:4px}
+    .lighting-controls.disabled{opacity:0.45}
+    .lighting-controls label{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
+    .lighting-controls input[type=range]{width:120px}
+    .lighting-value{min-width:40px;text-align:right;font-variant-numeric:tabular-nums;color:#1f2937}
+    .lighting-controls label.disabled{opacity:0.45}
   main{display:grid;place-items:center;padding:12px;position:relative}
   canvas{image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.12)}
   #bootStatus{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;display:none;white-space:pre-line;text-align:center;max-width:80%}
@@ -32,6 +40,22 @@
       <button id="zoomOut">−</button>
       <button id="zoomIn">+</button>
       <span id="zoomLabel"></span>
+      <button id="modeToggle" title="Toggle night/day rendering">Night Mode</button>
+      <button id="rainToggle" title="Toggle rain overlay">Rain</button>
+  <button id="thunderToggle" title="Toggle thunder flashes">Thunder</button>
+  <button id="lightingToggle" title="Toggle storm shadows · Shift+Click to cycle direction">Shadow</button>
+      <div class="lighting-controls" id="lightingControls">
+        <label class="slider-control" id="lightingAngleLabel">
+          <span>Dir</span>
+          <input type="range" id="lightingAngle" min="0" max="359" step="1" value="45"/>
+          <span class="lighting-value" id="lightingAngleValue">45deg</span>
+        </label>
+        <label class="slider-control" id="shadowLengthLabel">
+          <span>Depth</span>
+          <input type="range" id="shadowLength" min="0" max="16" step="0.5" value="6"/>
+          <span class="lighting-value" id="shadowLengthValue">6.0x</span>
+        </label>
+      </div>
       <span class="spacer"></span>
       <button id="full">Fullscreen</button>
     </header>
