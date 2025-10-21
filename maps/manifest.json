@@ -1,1 +1,14 @@
-["maps/plains.toml","maps/cave.toml","maps/town_square.toml", "maps/map_4.toml"]
+{
+  "files": [
+    "maps/plains.toml",
+    "maps/cave.toml",
+    "maps/town_square.toml",
+    "maps/map_4.toml"
+  ],
+  "default": {
+    "id": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
+    "file": "maps/plains.toml"
+  },
+  "defaultId": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
+  "defaultFile": "maps/plains.toml"
+}

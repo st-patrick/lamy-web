@@ -245,6 +245,18 @@ function cloneExtrasFromToml(t){
   return extras;
 }
 
+function cloneStorySection(raw){
+  if (!raw || typeof raw !== 'object') return {};
+  const story = {};
+  for (const [key, value] of Object.entries(raw)){
+    if (value === undefined) continue;
+    story[key] = (typeof value === 'object' && value !== null)
+      ? JSON.parse(JSON.stringify(value))
+      : value;
+  }
+  return story;
+}
+
 function backgroundGrid(map){
   const raw = map?.extras?.layers?.background?.grid;
   if (typeof raw !== 'string') return null;
@@ -468,6 +480,7 @@ function makeNewMap(){
     spawn: {x:1,y:1,w:DEFAULT_SPAWN_W,h:DEFAULT_SPAWN_H},
     exits: {left:null,right:null,top:null,bottom:null},
     chars: {...CH},
+    story: {},
     extras: makeEmptyExtras(),
     filename: null,
     source: null
@@ -2061,6 +2074,17 @@ function toToml(m){
   out.push(`h = ${m.spawn.h}`);
   out.push("");
 
+  const storySection = (m.story && typeof m.story === 'object') ? m.story : null;
+  if (storySection && Object.keys(storySection).length){
+    out.push(`[story]`);
+    const keys = Object.keys(storySection).sort();
+    for (const key of keys){
+      const serialized = formatTomlValue(storySection[key]);
+      if (serialized !== null) out.push(`${key} = ${serialized}`);
+    }
+    out.push("");
+  }
+
   if (extras.meta && Object.keys(extras.meta).length){
     out.push(`[meta]`);
     for (const [key, value] of Object.entries(extras.meta)){
@@ -2183,6 +2207,7 @@ function fromToml(txt, meta = {}){
     spawn: { x: t.spawn.x, y: t.spawn.y, w: t.spawn.w, h: t.spawn.h },
     exits: { left: t.exits?.left ?? null, right: t.exits?.right ?? null, top: t.exits?.top ?? null, bottom: t.exits?.bottom ?? null },
     chars: { wall: t.tiles?.wall ?? '#', floor: t.tiles?.floor ?? ' ' },
+    story: cloneStorySection(t.story),
     extras,
     filename: meta.filename ?? null,
     source: meta.source ?? null
