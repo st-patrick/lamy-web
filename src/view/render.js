@@ -1,5 +1,5 @@
 const LIGHT_DEFAULT = { wall:"#20242b", floor:"#f5f6f9", player:"#1976d2" };
-const DARK_DEFAULT  = { wall:"#d5d9e1", floor:"#1f242d", player:"#145ca3" };
+const DARK_DEFAULT  = { wall:"#000000", floor:"#111111", player:"#145ca3" };
 
 export function createRenderer(canvas, level, config) {
   let options = normalizeOptions(config);

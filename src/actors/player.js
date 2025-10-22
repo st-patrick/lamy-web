@@ -1,6 +1,6 @@
 import { tryMove } from "../physics/collision.js";
 export function createPlayer(spawn){
-  return { x: spawn.x + 0.05, y: spawn.y + 0.05, w: 2.0, h: 2.0, speed: 20.0 }; // tiles/sec
+  return { x: spawn.x + 0.05, y: spawn.y + 0.05, w: 2.0, h: 2.0, speed: 32.0 }; // tiles/sec
 }
 export function updatePlayer(p, input, dt, level){
   let dx=0, dy=0;
