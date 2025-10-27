@@ -6,9 +6,9 @@
     "maps/map_4.toml"
   ],
   "default": {
-    "id": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
-    "file": "maps/plains.toml"
+    "id": "61d3cae3-9ce6-4b1e-963c-1ab5dcd86204",
+    "file": "maps/town_square.toml"
   },
-  "defaultId": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
-  "defaultFile": "maps/plains.toml"
+  "defaultId": "61d3cae3-9ce6-4b1e-963c-1ab5dcd86204",
+  "defaultFile": "maps/town_square.toml"
 }
