@@ -52,6 +52,18 @@ export function parseTOML(src){
     return obj;
   };
 
+  const parseKeyName = (raw)=>{
+    if (!raw) return null;
+    if (raw.startsWith("\"") && raw.endsWith("\"")){
+      const inner = raw.slice(1, -1);
+      return inner
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+    }
+    if (/^[A-Za-z0-9_]+$/.test(raw)) return raw;
+    return null;
+  };
+
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   for (let raw of lines){
     const line = raw.trim();
@@ -74,20 +86,23 @@ export function parseTOML(src){
         continue;
       }
 
-      if ((m = line.match(/^([A-Za-z0-9_]+)\s*=\s*"""$/))){
-        const key = m[1];
-        inML = true;
-        mlKey = key;
-        mlBuf = [];
-        const forceRoot = shouldForceRoot(key, path);
-        mlTarget = forceRoot ? out : ctx;
-        if (forceRoot){ ctx = out; path = []; }
-        continue;
-      }
+      const eqIndex = line.indexOf('=');
+      if (eqIndex !== -1){
+        const rawKey = line.slice(0, eqIndex).trim();
+        const key = parseKeyName(rawKey);
+        if (!key) throw new Error(`TOML: unsupported key ${rawKey}`);
+        const rhs = line.slice(eqIndex + 1).trim();
 
-      if ((m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/))){
-        const key = m[1];
-        let rhs = m[2].trim();
+        if (rhs === '"""'){
+          inML = true;
+          mlKey = key;
+          mlBuf = [];
+          const forceRoot = shouldForceRoot(key, path);
+          mlTarget = forceRoot ? out : ctx;
+          if (forceRoot){ ctx = out; path = []; }
+          continue;
+        }
+
         let val;
         if ((/^".*"$/.test(rhs)) || (/^'.*'$/.test(rhs))){
           val = rhs.slice(1, -1)

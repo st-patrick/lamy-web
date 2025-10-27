@@ -1,11 +1,20 @@
 const LIGHT_DEFAULT = { wall:"#20242b", floor:"#f5f6f9", player:"#1976d2" };
 const DARK_DEFAULT  = { wall:"#000000", floor:"#111111", player:"#145ca3" };
+const IMAGE_CACHE = new Map();
 
 export function createRenderer(canvas, level, config) {
   let options = normalizeOptions(config);
   let palette = options.palette;
   let shadeFactor = options.backgroundShade;
   let bgCache = new Map();
+  const backgroundSource = level.backgroundImage || null;
+  const labelSprites = Array.isArray(level.labels)
+    ? level.labels.map(entry => ({
+        x: entry.x,
+        y: entry.y,
+        text: entry.text ?? entry.symbol ?? ""
+      }))
+    : [];
 
   let s = 12; // pixels per tile; main.js adjusts via auto-fit
   const ctx = canvas.getContext("2d", { alpha:false });
@@ -19,12 +28,27 @@ export function createRenderer(canvas, level, config) {
   resize();
 
   function render(state = {}){
-    ctx.fillStyle = palette.floor;
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    let bgHandle = null;
+    const hasBgImage = Boolean(backgroundSource);
     const bgGrid = level.background;
     const bgPalette = level.palette ?? {};
-    if (bgGrid){
+    const showFloor = options.showFloor !== false;
+
+    if (hasBgImage){
+      bgHandle = getImageHandle(backgroundSource);
+    }
+
+    const imageReady = hasBgImage && bgHandle?.status === "loaded";
+    if (imageReady){
+      drawImageCover(ctx, bgHandle.image, canvas.width, canvas.height);
+    } else if (showFloor){
+      ctx.fillStyle = palette.floor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (showFloor && bgGrid){
       for (let y=0; y<level.h; y++){
         for (let x=0; x<level.w; x++){
           const code = bgGrid[y]?.[x];
@@ -44,6 +68,28 @@ export function createRenderer(canvas, level, config) {
           ctx.fillRect(x*s, y*s, s, s);
         }
       }
+    }
+
+    if (labelSprites.length){
+      ctx.save();
+      const fontSize = Math.max(8, Math.round(s * 0.6));
+      ctx.font = `${fontSize}px "Segoe UI", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      const strokeWidth = Math.max(1, Math.round(fontSize * 0.2));
+      for (const label of labelSprites){
+        if (!label || !label.text) continue;
+        const cx = (label.x + 0.5) * s;
+        const cy = (label.y + 0.5) * s;
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = "rgba(17, 24, 39, 0.7)";
+        ctx.fillStyle = "#f8fafc";
+        ctx.strokeText(label.text, cx, cy);
+        ctx.fillText(label.text, cx, cy);
+      }
+      ctx.restore();
     }
 
     const p = state.player;
@@ -70,12 +116,27 @@ export function createRenderer(canvas, level, config) {
   return render;
 }
 
+function getImageHandle(src){
+  if (!src) return null;
+  if (IMAGE_CACHE.has(src)) return IMAGE_CACHE.get(src);
+
+  const image = new Image();
+  const handle = { image, status: "loading" };
+  image.onload = ()=>{ handle.status = "loaded"; };
+  image.onerror = ()=>{ handle.status = "error"; };
+  image.src = src;
+  IMAGE_CACHE.set(src, handle);
+  return handle;
+}
+
 function normalizeOptions(config){
   if (config && ("wall" in config || "floor" in config || "player" in config)){
+    const { showFloor = true, ...colors } = config;
     return {
       mode: "light",
-      palette: { ...LIGHT_DEFAULT, ...config },
-      backgroundShade: 1
+      palette: { ...LIGHT_DEFAULT, ...colors },
+      backgroundShade: 1,
+      showFloor
     };
   }
   const mode = config?.mode ?? "dark";
@@ -84,10 +145,12 @@ function normalizeOptions(config){
     ? config.backgroundShade
     : (mode === "dark" ? 0.78 : 1);
   const defaults = mode === "dark" ? DARK_DEFAULT : LIGHT_DEFAULT;
+  const showFloor = config?.showFloor === false ? false : true;
   return {
     mode,
     palette: { ...defaults, ...paletteOverride },
-    backgroundShade
+    backgroundShade,
+    showFloor
   };
 }
 
@@ -132,4 +195,14 @@ function clampByte(v){
 
 function toHex(v){
   return v.toString(16).padStart(2, "0");
+}
+
+function drawImageCover(ctx, image, width, height){
+  if (!image || width <= 0 || height <= 0) return;
+  const scale = Math.max(width / image.width, height / image.height);
+  const drawWidth = image.width * scale;
+  const drawHeight = image.height * scale;
+  const dx = (width - drawWidth) / 2;
+  const dy = (height - drawHeight) / 2;
+  ctx.drawImage(image, dx, dy, drawWidth, drawHeight);
 }

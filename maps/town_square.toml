@@ -158,6 +158,18 @@ grid = """
                                                                                                    
 """
 
+[layers.labels]
+grid = """
+
+                   ?
+
+                            !
+"""
+
+[layers.labels.legend]
+"?" = "Market Stage"
+"!" = "Town Well"
+
 [exits]
 left = "7a0deb4d-1adb-499e-a2a9-92229456254a"
 top = "d6b0a6a1-9f33-4edc-a3d5-8b22f6f1aa77"

@@ -9,8 +9,10 @@ import { maybePlaySequence, isSequenceActive } from "./game/sequences.js";
 
 let atlas = null, level = null, player = null, input = null, render = null, currentId = null;
 const DISPLAY_MODE_KEY = "lamy.displayMode";
+const FLOOR_PREF_KEY = "lamy.showFloor";
 const weather = createWeatherSystem();
 let renderMode = loadDisplayMode();
+let showFloor = loadFloorPreference();
 
 const canvas = document.getElementById("game");
 const bootStatus = document.getElementById("bootStatus");
@@ -20,6 +22,7 @@ const zoomOutBtn = document.getElementById("zoomOut");
 const zoomLabel = document.getElementById("zoomLabel");
 const fullBtn = document.getElementById("full");
 const modeToggle = document.getElementById("modeToggle");
+const floorToggle = document.getElementById("floorToggle");
 const rainToggle = document.getElementById("rainToggle");
 const thunderToggle = document.getElementById("thunderToggle");
 const lightingToggle = document.getElementById("lightingToggle");
@@ -68,7 +71,7 @@ async function boot(){
 
   player = createPlayer(level.spawn);
   input  = createInput();
-  render = createRenderer(canvas, level, { mode: renderMode });
+  render = createRenderer(canvas, level, { mode: renderMode, showFloor });
   fitToWindowHeight();
   weather.setLevel(level);
   startLoop(update, draw);
@@ -84,8 +87,16 @@ async function boot(){
     modeToggle.addEventListener("click", ()=>{
       renderMode = renderMode === "dark" ? "light" : "dark";
       saveDisplayMode(renderMode);
-      if (render) render.setOptions({ mode: renderMode });
+      refreshRenderOptions();
       updateModeButton();
+    });
+  }
+  if (floorToggle){
+    floorToggle.addEventListener("click", ()=>{
+      showFloor = !showFloor;
+      saveFloorPreference(showFloor);
+      refreshRenderOptions();
+      updateFloorButton();
     });
   }
   if (rainToggle){
@@ -133,6 +144,7 @@ async function boot(){
   }
 
   updateModeButton();
+  updateFloorButton();
   updateWeatherButtons();
 
   window.addEventListener("resize", fitToWindowHeight);
@@ -219,10 +231,11 @@ function switchMap(targetId, viaSide, prevPos){
   if (!node){ console.warn("Missing target map: " + targetId); return; }
 
   level = node.level;
-  render = createRenderer(canvas, level, { mode: renderMode });
+  render = createRenderer(canvas, level, { mode: renderMode, showFloor });
   fitToWindowHeight();
   weather.setLevel(level);
   updateWeatherButtons();
+  updateFloorButton();
 
   const ratioX = (prevPos.x + player.w/2) / Math.max(1, atlas[currentId].level.w);
   const ratioY = (prevPos.y + player.h/2) / Math.max(1, atlas[currentId].level.h);
@@ -262,6 +275,13 @@ function updateModeButton(){
   if (!modeToggle) return;
   modeToggle.textContent = renderMode === "dark" ? "Night Mode" : "Day Mode";
   modeToggle.classList.toggle("active", renderMode === "dark");
+}
+
+function updateFloorButton(){
+  if (!floorToggle) return;
+  floorToggle.classList.toggle("active", showFloor);
+  floorToggle.textContent = showFloor ? "Floor On" : "Floor Off";
+  floorToggle.title = showFloor ? "Hide floor overlay" : "Show floor overlay";
 }
 
 function updateWeatherButtons(){
@@ -325,6 +345,28 @@ function saveDisplayMode(mode){
   try {
     localStorage.setItem(DISPLAY_MODE_KEY, mode);
   } catch {}
+}
+
+function loadFloorPreference(){
+  try {
+    const stored = localStorage.getItem(FLOOR_PREF_KEY);
+    if (stored === null) return true;
+    return stored !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveFloorPreference(value){
+  try {
+    localStorage.setItem(FLOOR_PREF_KEY, value ? "true" : "false");
+  } catch {}
+}
+
+function refreshRenderOptions(){
+  if (!render) return;
+  const current = render.getOptions();
+  render.setOptions({ ...current, mode: renderMode, showFloor: showFloor });
 }
 
 if (typeof window !== "undefined"){

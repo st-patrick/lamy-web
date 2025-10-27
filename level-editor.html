@@ -50,9 +50,13 @@
     <button id="reloadMaps">Reload Maps</button>
   <button id="renderWorld">Reset View</button>
   <label><input id="showGrid" type="checkbox" checked>Gridlines</label>
+  <button id="toggleFloor" class="tool">Floor On</button>
   <label><input id="colorMode" type="checkbox">Edit color</label>
   <label>Color <input id="colorValue" type="color" value="#ffbf47"></label>
   <button id="addColor" class="tool">Add Color</button>
+  <label><input id="labelMode" type="checkbox">Edit labels</label>
+  <label>Symbol <input id="labelCode" type="text" value="?" maxlength="2" style="width:40px"></label>
+  <label>Label <input id="labelText" type="text" placeholder="Fountain" style="min-width:140px"></label>
   <label>Zoom <input id="z" type="range" min="0.05" max="4" step="0.02" value="0.8"></label>
   </div>
 
@@ -94,6 +98,10 @@ const mapColorContainer = document.getElementById('mapColors');
 const worldColorContainer = document.getElementById('worldColors');
 const helpBtn = document.getElementById('editorHelp');
 const resetViewBtn = document.getElementById('renderWorld');
+const floorToggleBtn = document.getElementById('toggleFloor');
+const labelModeToggle = document.getElementById('labelMode');
+const labelCodeInput = document.getElementById('labelCode');
+const labelTextInput = document.getElementById('labelText');
 const mapsSel = document.getElementById('maps');
 const nameIn = document.getElementById('mapName');
 const warn = document.getElementById('warn');
@@ -141,6 +149,7 @@ const DEFAULT_H = 70;
 const DEFAULT_SPAWN_W = 2;
 const DEFAULT_SPAWN_H = 2;
 const staleFolderEntries = new Set();
+const backgroundImageCache = new Map();
 
 function slugifyName(name){
   return String(name ?? '')
@@ -167,7 +176,11 @@ function ensureFilename(map, usedNames){
 }
 
 function makeEmptyExtras(){
-  return { meta:null, legend:null, palette:null, layers:null, triggers:[], poi:[] };
+  return { meta:null, legend:null, palette:null, layers:{}, triggers:[], poi:[] };
+}
+
+function makeBlankLayerString(width, height){
+  return Array.from({length:height}, ()=>' '.repeat(width)).join('\n');
 }
 
 function markPaletteDirty(){
@@ -277,18 +290,86 @@ function backgroundPalette(){
   return globalPaletteObject();
 }
 
+function backgroundImagePath(map){
+  const raw = map?.extras?.layers?.background?.image;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function resolveBackgroundImageHandle(map){
+  if (!map) return null;
+  const path = backgroundImagePath(map);
+  if (!path){
+    if (map._bgImageKey){
+      backgroundImageCache.delete(`${map.id}::${map._bgImageKey}`);
+      map._bgImageKey = null;
+    }
+    return null;
+  }
+  if (map._bgImageKey && map._bgImageKey !== path){
+    backgroundImageCache.delete(`${map.id}::${map._bgImageKey}`);
+    map._bgImageKey = null;
+  }
+  const key = `${map.id}::${path}`;
+  let handle = backgroundImageCache.get(key);
+  if (!handle){
+    let resolved = path;
+    try {
+      const base = map.source ? new URL(map.source, window.location.href) : new URL(window.location.href);
+      resolved = new URL(path, base).toString();
+    } catch (err){
+      try {
+        resolved = new URL(path, window.location.href).toString();
+      } catch {
+        resolved = path;
+      }
+    }
+    const image = new Image();
+    handle = { image, status:'loading', url: resolved, raw: path };
+    image.onload = ()=>{
+      handle.status = 'ready';
+      map._bgImageKey = path;
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(drawAtlas);
+      else setTimeout(drawAtlas, 0);
+    };
+    image.onerror = (err)=>{
+      handle.status = 'error';
+      console.warn('[Editor] Failed to load background image', { mapId: map.id, path, err });
+    };
+    image.src = resolved;
+    backgroundImageCache.set(key, handle);
+  }
+  if (!map._bgImageKey) map._bgImageKey = path;
+  return handle;
+}
+
+function resolveBackgroundPalette(map){
+  return { ...(backgroundPalette() || {}), ...(map?.extras?.palette || {}) };
+}
+
+function drawImageCover(ctx, image, x, y, width, height){
+  if (!ctx || !image || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+  const scale = Math.max(width / image.width, height / image.height);
+  const drawW = image.width * scale;
+  const drawH = image.height * scale;
+  const dx = x + (width - drawW) / 2;
+  const dy = y + (height - drawH) / 2;
+  ctx.drawImage(image, dx, dy, drawW, drawH);
+}
+
 function ensureBackgroundLayer(map){
   if (!map.extras) map.extras = makeEmptyExtras();
   if (!map.extras.layers || typeof map.extras.layers !== 'object') map.extras.layers = {};
   const layer = map.extras.layers.background;
   if (!layer || typeof layer !== 'object'){
     map.extras.layers.background = {
-      grid: Array.from({length:map.H}, ()=>' '.repeat(map.W)).join('\n')
+      grid: makeBlankLayerString(map.W, map.H)
     };
   }
   const bg = map.extras.layers.background;
   if (typeof bg.grid !== 'string'){
-    bg.grid = Array.from({length:map.H}, ()=>' '.repeat(map.W)).join('\n');
+    bg.grid = makeBlankLayerString(map.W, map.H);
   }
   return bg;
 }
@@ -434,6 +515,98 @@ function resizeBackground(map){
   map._bgCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid: newRows };
 }
 
+function getLabelLayer(map, create = false){
+  if (!map) return null;
+  if (!map.extras){
+    if (!create) return null;
+    map.extras = makeEmptyExtras();
+  }
+  if (!map.extras.layers || typeof map.extras.layers !== 'object'){
+    if (!create) return null;
+    map.extras.layers = {};
+  }
+  let layer = map.extras.layers.labels;
+  if (!layer || typeof layer !== 'object'){
+    if (!create) return null;
+    layer = { grid: makeBlankLayerString(map.W, map.H), legend: {} };
+    map.extras.layers.labels = layer;
+  }
+  if (typeof layer.grid !== 'string'){
+    if (!create) return null;
+    layer.grid = makeBlankLayerString(map.W, map.H);
+  }
+  if (!layer.legend || typeof layer.legend !== 'object'){
+    layer.legend = layer.legend && typeof layer.legend === 'object' ? layer.legend : {};
+  }
+  return layer;
+}
+
+function ensureLabelLayer(map){
+  return getLabelLayer(map, true);
+}
+
+function labelGrid(map, create = false){
+  const layer = getLabelLayer(map, create);
+  const cached = map._labelCache;
+  if (!layer) return null;
+  const raw = layer.grid || '';
+  const key = `${map.W}x${map.H}:${raw.length}`;
+  if (cached && cached.key === key && cached.raw === raw) return cached.grid;
+  const lines = raw.replace(/\r\n?/g,"\n").split("\n");
+  const grid = Array.from({length:map.H}, (_,y)=>{
+    const line = lines[y] ?? "";
+    const padded = line.padEnd(map.W, ' ');
+    return Array.from({length:map.W}, (_,x)=> padded[x] ?? ' ');
+  });
+  map._labelCache = { key, raw, grid };
+  return grid;
+}
+
+function labelLegend(map){
+  const layer = getLabelLayer(map, false);
+  return layer?.legend || {};
+}
+
+function setLabelLegendEntry(map, symbol, value){
+  if (!symbol) return false;
+  const legend = ensureLabelLayer(map).legend;
+  if (!value){
+    if (legend[symbol] !== undefined){
+      delete legend[symbol];
+      return true;
+    }
+    return false;
+  }
+  if (legend[symbol] === value) return false;
+  legend[symbol] = value;
+  return true;
+}
+
+function setLabelTile(map, x, y, code){
+  if (x<0 || y<0 || x>=map.W || y>=map.H) return false;
+  const grid = labelGrid(map, true);
+  const next = code ?? ' ';
+  if (grid[y][x] === next) return false;
+  grid[y][x] = next;
+  const lines = grid.map(row=>row.join('').slice(0,map.W));
+  const serialized = lines.join('\n');
+  ensureLabelLayer(map).grid = serialized;
+  map._labelCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid };
+  return true;
+}
+
+function resizeLabels(map){
+  ensureLabelLayer(map);
+  const grid = labelGrid(map, true);
+  const newRows = Array.from({length:map.H}, (_,y)=>{
+    const row = grid[y] || [];
+    return Array.from({length:map.W}, (_,x)=> row[x] ?? ' ');
+  });
+  const serialized = newRows.map(r=>r.join('')).join('\n');
+  map.extras.layers.labels.grid = serialized;
+  map._labelCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid: newRows };
+}
+
 function clearModel(){
   model.maps.clear();
   model.current = null;
@@ -444,6 +617,7 @@ function clearModel(){
   model.paletteVersion = 0;
   model.paletteCache = null;
   staleFolderEntries.clear();
+  backgroundImageCache.clear();
   atlasInitialized = false;
   mapsSel.innerHTML = '';
   warn.textContent = '';
@@ -483,9 +657,11 @@ function makeNewMap(){
     story: {},
     extras: makeEmptyExtras(),
     filename: null,
-    source: null
+    source: null,
+    _bgImageKey: null
   };
   resizeBackground(data);
+  resizeLabels(data);
   ensureBackgroundPalette(data);
   model.maps.set(id, data);
   if (!model.defaultId){
@@ -1064,6 +1240,10 @@ const atlasState = {
   cardPadding: 16,
   headerHeight: 28,
   showGrid: true,
+  showFloor: true,
+  labelMode: false,
+  labelSymbol: '?',
+  labelText: 'Fountain',
   paintButtonMask: 1,
   activePaintTool: null,
   paintStart: null,
@@ -1090,9 +1270,21 @@ if (storedEditorPrefs){
     atlasState.showGrid = storedEditorPrefs.showGrid;
     if (gridToggle) gridToggle.checked = storedEditorPrefs.showGrid;
   }
+  if (typeof storedEditorPrefs.showFloor === 'boolean'){
+    atlasState.showFloor = storedEditorPrefs.showFloor;
+  }
   if (typeof storedEditorPrefs.colorMode === 'boolean'){
     atlasState.colorMode = storedEditorPrefs.colorMode;
     if (colorModeToggle) colorModeToggle.checked = storedEditorPrefs.colorMode;
+  }
+  if (typeof storedEditorPrefs.labelMode === 'boolean'){
+    atlasState.labelMode = storedEditorPrefs.labelMode;
+  }
+  if (typeof storedEditorPrefs.labelSymbol === 'string' && storedEditorPrefs.labelSymbol.length){
+    atlasState.labelSymbol = storedEditorPrefs.labelSymbol;
+  }
+  if (typeof storedEditorPrefs.labelText === 'string'){
+    atlasState.labelText = storedEditorPrefs.labelText;
   }
   if (typeof storedEditorPrefs.activeColorKey === 'string'){
     atlasState.activeColorKey = storedEditorPrefs.activeColorKey;
@@ -1101,6 +1293,28 @@ if (storedEditorPrefs){
     atlasState.pendingColorValue = storedEditorPrefs.pendingColorValue;
   }
 }
+
+function updateFloorToggleButton(){
+  if (!floorToggleBtn) return;
+  floorToggleBtn.classList.toggle('active', atlasState.showFloor);
+  floorToggleBtn.textContent = atlasState.showFloor ? 'Floor On' : 'Floor Off';
+  floorToggleBtn.title = atlasState.showFloor ? 'Hide floor overlay' : 'Show floor overlay';
+}
+
+updateFloorToggleButton();
+
+function updateLabelControls(){
+  if (labelModeToggle) labelModeToggle.checked = atlasState.labelMode;
+  if (labelCodeInput){
+    const symbol = atlasState.labelSymbol || '?';
+    labelCodeInput.value = symbol;
+  }
+  if (labelTextInput){
+    labelTextInput.value = atlasState.labelText || '';
+  }
+}
+
+updateLabelControls();
 
 function updateCursor(){
   const isPanning = atlasState.pointerMode === 'pan';
@@ -1318,16 +1532,24 @@ function drawAtlas(){
     atlasCtx.fillStyle = '#1f2937';
     atlasCtx.fillRect(cardX, cardY, cardW, header);
     atlasCtx.fillStyle = '#e5e7eb';
-  atlasCtx.fillText(title, cardX + 12, cardY + 6);
-    atlasCtx.fillStyle = floorColor;
-    atlasCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    atlasCtx.fillText(title, cardX + 12, cardY + 6);
 
-    const bg = backgroundGrid(map);
-  const palette = backgroundPalette() || {};
-    if (bg){
+    const bgGrid = backgroundGrid(map);
+    const palette = resolveBackgroundPalette(map);
+    const bgHandle = resolveBackgroundImageHandle(map);
+    const hasBgImage = Boolean(bgHandle && bgHandle.status === 'ready');
+
+    if (hasBgImage){
+      drawImageCover(atlasCtx, bgHandle.image, rect.x, rect.y, rect.w, rect.h);
+    } else if (atlasState.showFloor){
+      atlasCtx.fillStyle = floorColor;
+      atlasCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    }
+
+    if (atlasState.showFloor && bgGrid){
       for (let y=0;y<map.H;y++){
         for (let x=0;x<map.W;x++){
-          const code = bg[y]?.[x];
+          const code = bgGrid[y]?.[x];
           const color = code ? palette[code] : null;
           if (!color) continue;
           atlasCtx.fillStyle = color;
@@ -1343,6 +1565,34 @@ function drawAtlas(){
           atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
         }
       }
+    }
+
+    const labelsMatrix = labelGrid(map);
+    const labelsLegend = labelLegend(map);
+    if (labelsMatrix){
+      atlasCtx.save();
+      const fontSize = Math.max(10, Math.round(tile * 0.6));
+      atlasCtx.font = `${fontSize}px "Segoe UI", sans-serif`;
+      atlasCtx.textAlign = 'center';
+      atlasCtx.textBaseline = 'middle';
+      atlasCtx.lineJoin = 'round';
+      atlasCtx.lineCap = 'round';
+      const strokeSize = Math.max(1, Math.round(fontSize * 0.2));
+      for (let y=0;y<map.H;y++){
+        for (let x=0;x<map.W;x++){
+          const symbol = labelsMatrix[y]?.[x];
+          if (!symbol || symbol === ' ') continue;
+          const text = labelsLegend?.[symbol] ?? symbol;
+          const cx = rect.x + x*tile + tile/2;
+          const cy = rect.y + y*tile + tile/2;
+          atlasCtx.lineWidth = strokeSize;
+          atlasCtx.strokeStyle = 'rgba(15,23,42,0.72)';
+          atlasCtx.fillStyle = '#f9fafb';
+          atlasCtx.strokeText(text, cx, cy);
+          atlasCtx.fillText(text, cx, cy);
+        }
+      }
+      atlasCtx.restore();
     }
 
     if (atlasState.showGrid){
@@ -1495,6 +1745,19 @@ function ensureActivePaletteEntry(map){
 function paintTile(map, localX, localY, activeTool){
   if (!map) return false;
   if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return false;
+  if (atlasState.labelMode){
+    ensureLabelLayer(map);
+    const symbolRaw = atlasState.labelSymbol || '?';
+    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
+    const next = (activeTool === 'erase') ? ' ' : symbol;
+    let changed = setLabelTile(map, localX, localY, next);
+    if (activeTool !== 'erase'){
+      const text = (atlasState.labelText ?? '').trim();
+      const display = text || symbol;
+      changed = setLabelLegendEntry(map, symbol, display) || changed;
+    }
+    return changed;
+  }
   if (atlasState.colorMode){
     ensureActiveColorKey();
     ensureBackgroundLayer(map);
@@ -1531,7 +1794,7 @@ function applyPointTool(worldX, worldY, forcedTool = null){
   const localX = Math.floor((worldX - hit.x) / hit.tile);
   const localY = Math.floor((worldY - hit.y) / hit.tile);
   const activeTool = forcedTool ?? tool;
-  if (atlasState.colorMode && activeTool === 'spawn') return;
+  if ((atlasState.colorMode || atlasState.labelMode) && activeTool === 'spawn') return;
 
   const changed = paintTile(map, localX, localY, activeTool);
   if (!changed) return;
@@ -1577,6 +1840,13 @@ function paintLineBetween(map, start, end, action){
   const points = collectLinePoints(start, end);
   let changed = false;
   if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
+  if (atlasState.labelMode && action === 'paint'){
+    ensureLabelLayer(map);
+    const symbolRaw = atlasState.labelSymbol || '?';
+    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
+    const text = (atlasState.labelText ?? '').trim() || symbol;
+    setLabelLegendEntry(map, symbol, text);
+  }
   for (const pt of points){
     const mode = action === 'erase' ? 'erase' : 'brush';
     changed = paintTile(map, pt.x, pt.y, mode) || changed;
@@ -1619,6 +1889,13 @@ function paintRectArea(map, start, end, action){
   const points = collectRectPoints(start, end, filled);
   let changed = false;
   if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
+  if (atlasState.labelMode && action === 'paint'){
+    ensureLabelLayer(map);
+    const symbolRaw = atlasState.labelSymbol || '?';
+    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
+    const text = (atlasState.labelText ?? '').trim() || symbol;
+    setLabelLegendEntry(map, symbol, text);
+  }
   for (const pt of points){
     const mode = action === 'erase' ? 'erase' : 'brush';
     changed = paintTile(map, pt.x, pt.y, mode) || changed;
@@ -1917,6 +2194,63 @@ if (gridToggle){
   });
 }
 
+if (floorToggleBtn){
+  floorToggleBtn.addEventListener('click', ()=>{
+    atlasState.showFloor = !atlasState.showFloor;
+    updateFloorToggleButton();
+    drawAtlas();
+    scheduleEditorPrefsSave();
+  });
+}
+
+if (labelModeToggle){
+  labelModeToggle.checked = !!atlasState.labelMode;
+  atlasState.labelMode = labelModeToggle.checked;
+  labelModeToggle.addEventListener('change', e=>{
+    atlasState.labelMode = e.target.checked;
+    updateCursor();
+    drawAtlas();
+    scheduleEditorPrefsSave();
+  });
+}
+
+if (labelCodeInput){
+  const initial = atlasState.labelSymbol || '?';
+  labelCodeInput.value = initial;
+  labelCodeInput.addEventListener('input', e=>{
+    const raw = (e.target.value || '').trim();
+    const symbol = raw ? raw[0] : '?';
+    atlasState.labelSymbol = symbol;
+    if (symbol !== e.target.value){
+      e.target.value = symbol;
+    }
+    scheduleEditorPrefsSave();
+  });
+}
+
+if (labelTextInput){
+  labelTextInput.value = atlasState.labelText || '';
+  const updateLegend = ()=>{
+    const map = cur();
+    if (!map) return;
+    const symbolRaw = atlasState.labelSymbol || '?';
+    const symbol = symbolRaw.length ? symbolRaw[0] : '?';
+    const text = (atlasState.labelText ?? '').trim();
+    if (text){
+      if (setLabelLegendEntry(map, symbol, text)){
+        syncToml();
+      }
+    }
+    drawAtlas();
+  };
+  labelTextInput.addEventListener('input', e=>{
+    atlasState.labelText = e.target.value;
+    scheduleEditorPrefsSave();
+    updateLegend();
+  });
+  labelTextInput.addEventListener('change', updateLegend);
+}
+
 if (colorModeToggle){
   colorModeToggle.checked = !!atlasState.colorMode;
   atlasState.colorMode = colorModeToggle.checked;
@@ -2089,7 +2423,7 @@ function toToml(m){
     out.push(`[meta]`);
     for (const [key, value] of Object.entries(extras.meta)){
       const serialized = formatTomlValue(value);
-      if (serialized !== null) out.push(`${key} = ${serialized}`);
+      if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
     }
     out.push("");
   }
@@ -2098,7 +2432,7 @@ function toToml(m){
     out.push(`[legend]`);
     for (const [key, value] of Object.entries(extras.legend)){
       const serialized = formatTomlValue(value);
-      if (serialized !== null) out.push(`${key} = ${serialized}`);
+      if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
     }
     out.push("");
   }
@@ -2109,7 +2443,7 @@ function toToml(m){
     out.push(`[palette]`);
     for (const [key, value] of Object.entries(paletteEntries)){
       const serialized = formatTomlValue(value);
-      if (serialized !== null) out.push(`${key} = ${serialized}`);
+      if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
     }
     out.push("");
   }
@@ -2131,14 +2465,27 @@ function toToml(m){
     for (const [layerName, layer] of Object.entries(extras.layers)){
       if (!layer || typeof layer !== 'object') continue;
       out.push(`[layers.${layerName}]`);
+      const nested = [];
       for (const [key, value] of Object.entries(layer)){
+        if (value && typeof value === 'object' && !Array.isArray(value)){
+          nested.push([key, value]);
+          continue;
+        }
         if (typeof value === 'string' && value.includes("\n")){
-          out.push(`${key} = """`);
+          out.push(`${formatTomlKey(key)} = """`);
           out.push(...value.split("\n"));
           out.push(`"""`);
         } else {
           const serialized = formatTomlValue(value);
-          if (serialized !== null) out.push(`${key} = ${serialized}`);
+          if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
+        }
+      }
+      for (const [childKey, childObj] of nested){
+        out.push("");
+        out.push(`[layers.${layerName}.${childKey}]`);
+        for (const [leafKey, leafVal] of Object.entries(childObj)){
+          const serialized = formatTomlValue(leafVal);
+          if (serialized !== null) out.push(`${formatTomlKey(leafKey)} = ${serialized}`);
         }
       }
       out.push("");
@@ -2168,6 +2515,10 @@ function escapeTomlString(str){
   return String(str ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function formatTomlKey(key){
+  return /^[A-Za-z0-9_]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
+}
+
 function formatTomlValue(value){
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
@@ -2181,14 +2532,14 @@ function writeOrderedTable(out, entry, order){
     if (entry[key] === undefined) continue;
     const serialized = formatTomlValue(entry[key]);
     if (serialized !== null){
-      out.push(`${key} = ${serialized}`);
+      out.push(`${formatTomlKey(key)} = ${serialized}`);
       seen.add(key);
     }
   }
   for (const key of Object.keys(entry)){
     if (seen.has(key)) continue;
     const serialized = formatTomlValue(entry[key]);
-    if (serialized !== null) out.push(`${key} = ${serialized}`);
+    if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
   }
 }
 function fromToml(txt, meta = {}){
@@ -2214,7 +2565,9 @@ function fromToml(txt, meta = {}){
   };
   registerPaletteEntries(extras.palette);
   resizeBackground(map);
+  resizeLabels(map);
   ensureBackgroundPalette(map);
+  map._bgImageKey = backgroundImagePath(map);
   return map;
 }
 
@@ -2244,7 +2597,11 @@ function saveEditorPrefs(){
     zoom: atlasState.zoom,
     pan: { x: atlasState.pan.x, y: atlasState.pan.y },
     showGrid: atlasState.showGrid,
+  showFloor: atlasState.showFloor,
     colorMode: atlasState.colorMode,
+  labelMode: atlasState.labelMode,
+  labelSymbol: atlasState.labelSymbol,
+  labelText: atlasState.labelText,
     activeColorKey: atlasState.activeColorKey,
     pendingColorValue: atlasState.pendingColorValue,
     tool,

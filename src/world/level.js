@@ -40,6 +40,39 @@ export function parseTomlLevel(tomlText){
     });
   }
 
+  const backgroundImage = typeof t.layers?.background?.image === "string"
+    ? t.layers.background.image.trim() || null
+    : null;
+
+  let labels = [];
+  let labelLegend = null;
+  const labelGridRaw = t.layers?.labels?.grid;
+  if (typeof labelGridRaw === "string"){
+    const lines = labelGridRaw.replace(/\r\n?/g, "\n").split("\n");
+    const legendSource = t.layers?.labels?.legend;
+    const legend = {};
+    if (legendSource && typeof legendSource === "object"){
+      for (const [key, value] of Object.entries(legendSource)){
+        if (typeof key !== "string" || !key.length) continue;
+        if (typeof value !== "string") continue;
+        legend[key] = value;
+      }
+    }
+    labelLegend = Object.keys(legend).length ? legend : null;
+    for (let y = 0; y < h; y++){
+      const line = lines[y] ?? "";
+      const padded = line.padEnd(w, " ");
+      const row = Array.from({ length: w }, (_, x) => padded[x] ?? " ");
+      for (let x = 0; x < w; x++){
+        const symbol = row[x];
+        if (!symbol || symbol === " ") continue;
+        const text = legend[symbol] ?? symbol;
+        labels.push({ x, y, symbol, text });
+      }
+    }
+    if (!labels.length) labels = [];
+  }
+
   const spawn = {
     x: must(t.spawn?.x, "spawn.x"),
     y: must(t.spawn?.y, "spawn.y"),
@@ -62,7 +95,24 @@ export function parseTomlLevel(tomlText){
   const isSolid = c => SOLID.has(c);
   const at = (x,y) => grid[y]?.[x] ?? chars.wall; // OOB acts as wall
 
-  return { id, name, w, h, grid, chars, spawn, exits, palette, background, isSolid, at, story };
+  return {
+    id,
+    name,
+    w,
+    h,
+    grid,
+    chars,
+    spawn,
+    exits,
+    palette,
+    background,
+    backgroundImage,
+    labels,
+    labelLegend,
+    isSolid,
+    at,
+    story
+  };
 }
 
 export function rectIsClear(level, x, y, w, h){

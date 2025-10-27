@@ -161,8 +161,23 @@ grid = """
                                                                                                    
 """
 
+[layers.labels]
+grid = """
+
+        ?
+
+                        !
+"""
+
+[layers.labels.legend]
+"?" = "Fountain"
+"!" = "Campfire"
+
 [exits]
 right = "d6b0a6a1-9f33-4edc-a3d5-8b22f6f1aa77"
 
 [story]
 on_load_sequence = "dreamsequence_001"
+
+[layers.background]
+image = "bg/home.png"
