@@ -12,13 +12,6 @@ export function parseTomlLevel(tomlText){
     floor: (t.tiles?.floor ?? " ")
   };
 
-  const palette = {};
-  if (t.palette && typeof t.palette === "object"){
-    for (const [k, v] of Object.entries(t.palette)){
-      if (typeof v === "string" && k.length === 1) palette[k] = v;
-    }
-  }
-
   // Preserve empty lines and trailing spaces (no trim!)
   const rows = String(must(t.grid, "grid")).replace(/\r\n?/g, "\n").split("\n");
   const h = rows.length, w = Math.max(...rows.map(r => r.length));
@@ -29,49 +22,9 @@ export function parseTomlLevel(tomlText){
     return Array.from({length:w}, (_,x)=> padded[x] ?? chars.floor);
   });
 
-  let background = null;
-  const bgRaw = t.layers?.background?.grid;
-  if (typeof bgRaw === "string"){
-    const bgLines = bgRaw.replace(/\r\n?/g, "\n").split("\n");
-    background = Array.from({length:h}, (_,y)=>{
-      const line = bgLines[y] ?? "";
-      const padded = line.padEnd(w, " ");
-      return Array.from({length:w}, (_,x)=> padded[x] ?? " ");
-    });
-  }
-
   const backgroundImage = typeof t.layers?.background?.image === "string"
     ? t.layers.background.image.trim() || null
     : null;
-
-  let labels = [];
-  let labelLegend = null;
-  const labelGridRaw = t.layers?.labels?.grid;
-  if (typeof labelGridRaw === "string"){
-    const lines = labelGridRaw.replace(/\r\n?/g, "\n").split("\n");
-    const legendSource = t.layers?.labels?.legend;
-    const legend = {};
-    if (legendSource && typeof legendSource === "object"){
-      for (const [key, value] of Object.entries(legendSource)){
-        if (typeof key !== "string" || !key.length) continue;
-        if (typeof value !== "string") continue;
-        legend[key] = value;
-      }
-    }
-    labelLegend = Object.keys(legend).length ? legend : null;
-    for (let y = 0; y < h; y++){
-      const line = lines[y] ?? "";
-      const padded = line.padEnd(w, " ");
-      const row = Array.from({ length: w }, (_, x) => padded[x] ?? " ");
-      for (let x = 0; x < w; x++){
-        const symbol = row[x];
-        if (!symbol || symbol === " ") continue;
-        const text = legend[symbol] ?? symbol;
-        labels.push({ x, y, symbol, text });
-      }
-    }
-    if (!labels.length) labels = [];
-  }
 
   const spawn = {
     x: must(t.spawn?.x, "spawn.x"),
@@ -104,11 +57,7 @@ export function parseTomlLevel(tomlText){
     chars,
     spawn,
     exits,
-    palette,
-    background,
     backgroundImage,
-    labels,
-    labelLegend,
     isSolid,
     at,
     story

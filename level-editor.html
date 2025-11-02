@@ -26,49 +26,21 @@
   #atlas{width:100%;height:100%;display:block;background:#0e1118;box-shadow:0 6px 24px rgba(0,0,0,.15);touch-action:none;image-rendering:pixelated;border-radius:12px;cursor:grab;}
   #atlas.grab{cursor:grab;}
   #atlas.grabbing{cursor:grabbing;}
-  .paletteRow{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:6px;}
-  .color-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
-  .color-chip{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,0.15);}
-  .color-chip.active{border-color:#0ea5e9;box-shadow:0 0 0 2px rgba(14,165,233,0.25);}
-  .color-chip span{display:none;}
-  .palette-group{display:flex;flex-direction:column;gap:6px;}
 </style>
 
 <header>
   <div class="row">
     <button id="newMap">New Map</button>
-  <button id="editorHelp" class="tool" title="Maps are fixed 99x70 with a 2x2 spawn. Hold space or middle mouse to pan. Right-click to erase.">?</button>
     <input id="mapName" type="text" placeholder="Map name"/>
 
   <span class="tool" id="paintLine" title="Line (L) - RMB erases">Line (L)</span>
   <span class="tool" id="paintRect" title="Rect (R) - RMB erases">Rect (R)</span>
   <span class="tool" id="paintSpawn" title="3 or P">Spawn (P)</span>
 
-    <select id="maps"></select>
     <button id="makeDefault">Set Default Start</button>
     <button id="saveMaps">Save Maps…</button>
-    <button id="reloadMaps">Reload Maps</button>
-  <button id="renderWorld">Reset View</button>
   <label><input id="showGrid" type="checkbox" checked>Gridlines</label>
-  <button id="toggleFloor" class="tool">Floor On</button>
-  <label><input id="colorMode" type="checkbox">Edit color</label>
-  <label>Color <input id="colorValue" type="color" value="#ffbf47"></label>
-  <button id="addColor" class="tool">Add Color</button>
-  <label><input id="labelMode" type="checkbox">Edit labels</label>
-  <label>Symbol <input id="labelCode" type="text" value="?" maxlength="2" style="width:40px"></label>
-  <label>Label <input id="labelText" type="text" placeholder="Fountain" style="min-width:140px"></label>
-  <label>Zoom <input id="z" type="range" min="0.05" max="4" step="0.02" value="0.8"></label>
-  </div>
-
-  <div class="paletteRow">
-    <div class="palette-group">
-      <span class="muted">Map colors</span>
-      <div id="mapColors" class="color-chips"></div>
-    </div>
-    <div class="palette-group">
-      <span class="muted">World palette</span>
-      <div id="worldColors" class="color-chips"></div>
-    </div>
+  <label><input id="showWalls" type="checkbox">Wall overlay</label>
   </div>
 
   <div class="row" style="margin-top:6px">
@@ -89,25 +61,13 @@
 
 <script>
 const atlasCv = document.getElementById('atlas'), atlasCtx = atlasCv.getContext('2d');
-const zoomInput = document.getElementById('z');
 const gridToggle = document.getElementById('showGrid');
-const colorModeToggle = document.getElementById('colorMode');
-const colorValueInput = document.getElementById('colorValue');
-const addColorBtn = document.getElementById('addColor');
-const mapColorContainer = document.getElementById('mapColors');
-const worldColorContainer = document.getElementById('worldColors');
-const helpBtn = document.getElementById('editorHelp');
-const resetViewBtn = document.getElementById('renderWorld');
-const floorToggleBtn = document.getElementById('toggleFloor');
-const labelModeToggle = document.getElementById('labelMode');
-const labelCodeInput = document.getElementById('labelCode');
-const labelTextInput = document.getElementById('labelText');
-const mapsSel = document.getElementById('maps');
+const wallToggle = document.getElementById('showWalls');
 const nameIn = document.getElementById('mapName');
 const warn = document.getElementById('warn');
 const saveMapsBtn = document.getElementById('saveMaps');
-const reloadMapsBtn = document.getElementById('reloadMaps');
 const setDefaultBtn = document.getElementById('makeDefault');
+const reloadMapsBtn = document.getElementById('reloadMaps');
 let currentToml = '';
 
 const EDITOR_PREF_KEY = 'lamy.editor.v1';
@@ -138,10 +98,7 @@ const model = {
   current: null,
   defaultId: null,
   defaultSource: null,
-  manifestFiles: [],
-  palette: new Map(),
-  paletteVersion: 0,
-  paletteCache: null
+  manifestFiles: []
 };
 const CH = { wall:'#', floor:' ' };
 const DEFAULT_W = 99;
@@ -176,80 +133,26 @@ function ensureFilename(map, usedNames){
 }
 
 function makeEmptyExtras(){
-  return { meta:null, legend:null, palette:null, layers:{}, triggers:[], poi:[] };
-}
-
-function makeBlankLayerString(width, height){
-  return Array.from({length:height}, ()=>' '.repeat(width)).join('\n');
-}
-
-function markPaletteDirty(){
-  model.paletteVersion++;
-  model.paletteCache = null;
-}
-
-function ensurePaletteSeed(){
-  if (model.palette.size === 0){
-    model.palette.set('a', '#ffbf47');
-    markPaletteDirty();
-  }
-}
-
-function globalPaletteObject(){
-  if (!model.paletteCache){
-    model.paletteCache = Object.fromEntries(model.palette.entries());
-  }
-  return model.paletteCache;
-}
-
-function registerPaletteEntries(entries){
-  if (!entries || typeof entries !== 'object') return;
-  let updated = false;
-  for (const [key, value] of Object.entries(entries)){
-    if (!key || typeof value !== 'string') continue;
-    if (!model.palette.has(key)){
-      model.palette.set(key, value);
-      updated = true;
-    }
-  }
-  if (updated) markPaletteDirty();
-}
-
-function findPaletteKeyByColor(color){
-  if (!color) return null;
-  const target = color.toLowerCase();
-  for (const [key, value] of model.palette.entries()){
-    if (typeof value === 'string' && value.toLowerCase() === target) return key;
-  }
-  return null;
-}
-
-function allocatePaletteKey(){
-  const sequence = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  for (const ch of sequence){
-    if (!model.palette.has(ch)) return ch;
-  }
-  let idx = 1;
-  while (true){
-    const key = `c${idx++}`;
-    if (!model.palette.has(key)) return key;
-  }
+  return { meta:null, layers:{}, triggers:[], poi:[] };
 }
 
 function cloneExtrasFromToml(t){
   const extras = makeEmptyExtras();
   if (t.meta && typeof t.meta === 'object') extras.meta = { ...t.meta };
-  if (t.legend && typeof t.legend === 'object') extras.legend = { ...t.legend };
-  if (t.palette && typeof t.palette === 'object') extras.palette = { ...t.palette };
   if (t.layers && typeof t.layers === 'object'){
     extras.layers = {};
     for (const [layerName, layerData] of Object.entries(t.layers)){
+      if (layerName === 'labels') continue;
       if (!layerData || typeof layerData !== 'object') continue;
-      extras.layers[layerName] = {};
+      const copy = {};
       for (const [k, v] of Object.entries(layerData)){
-        extras.layers[layerName][k] = (typeof v === 'object' && v !== null)
+        if (layerName === 'background' && k === 'grid') continue; // drop legacy color grids
+        copy[k] = (typeof v === 'object' && v !== null)
           ? JSON.parse(JSON.stringify(v))
           : v;
+      }
+      if (Object.keys(copy).length > 0){
+        extras.layers[layerName] = copy;
       }
     }
   }
@@ -268,26 +171,6 @@ function cloneStorySection(raw){
       : value;
   }
   return story;
-}
-
-function backgroundGrid(map){
-  const raw = map?.extras?.layers?.background?.grid;
-  if (typeof raw !== 'string') return null;
-  const key = `${map.W}x${map.H}:${raw.length}`;
-  if (!map._bgCache || map._bgCache.key !== key || map._bgCache.raw !== raw){
-    const lines = raw.replace(/\r\n?/g,"\n").split("\n");
-    const grid = Array.from({length:map.H}, (_,y)=>{
-      const line = lines[y] ?? "";
-      const padded = line.padEnd(map.W, ' ');
-      return Array.from({length:map.W}, (_,x)=> padded[x] ?? ' ');
-    });
-    map._bgCache = { key, raw, grid };
-  }
-  return map._bgCache.grid;
-}
-
-function backgroundPalette(){
-  return globalPaletteObject();
 }
 
 function backgroundImagePath(map){
@@ -344,10 +227,6 @@ function resolveBackgroundImageHandle(map){
   return handle;
 }
 
-function resolveBackgroundPalette(map){
-  return { ...(backgroundPalette() || {}), ...(map?.extras?.palette || {}) };
-}
-
 function drawImageCover(ctx, image, x, y, width, height){
   if (!ctx || !image || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
   const scale = Math.max(width / image.width, height / image.height);
@@ -358,268 +237,15 @@ function drawImageCover(ctx, image, x, y, width, height){
   ctx.drawImage(image, dx, dy, drawW, drawH);
 }
 
-function ensureBackgroundLayer(map){
-  if (!map.extras) map.extras = makeEmptyExtras();
-  if (!map.extras.layers || typeof map.extras.layers !== 'object') map.extras.layers = {};
-  const layer = map.extras.layers.background;
-  if (!layer || typeof layer !== 'object'){
-    map.extras.layers.background = {
-      grid: makeBlankLayerString(map.W, map.H)
-    };
-  }
-  const bg = map.extras.layers.background;
-  if (typeof bg.grid !== 'string'){
-    bg.grid = makeBlankLayerString(map.W, map.H);
-  }
-  return bg;
-}
-
-function usedPaletteKeys(map){
-  const keys = new Set();
-  const grid = backgroundGrid(map);
-  if (!grid) return keys;
-  for (const row of grid){
-    for (const code of row){
-      if (code && code !== ' ') keys.add(code);
-    }
-  }
-  return keys;
-}
-
-function ensureBackgroundPalette(map){
-  if (!map.extras) map.extras = makeEmptyExtras();
-  if (!map.extras.palette || typeof map.extras.palette !== 'object') map.extras.palette = {};
-  const keys = usedPaletteKeys(map);
-  for (const key of keys){
-    if (!model.palette.has(key)) continue;
-    const color = model.palette.get(key);
-    if (map.extras.palette[key] !== color){
-      map.extras.palette[key] = color;
-    }
-  }
-  return map.extras.palette;
-}
-
-function mapPaletteEntries(map){
-  const entries = {};
-  if (!map) return entries;
-  const keys = usedPaletteKeys(map);
-  for (const key of keys){
-    if (model.palette.has(key)) entries[key] = model.palette.get(key);
-  }
-  return entries;
-}
-
-function appendColorChip(container, key){
-  if (!container || !model.palette.has(key)) return;
-  const color = model.palette.get(key);
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'color-chip';
-  btn.style.background = color;
-  btn.title = `${key}: ${color}`;
-  if (key === atlasState.activeColorKey) btn.classList.add('active');
-  btn.addEventListener('click', ()=>{
-    atlasState.activeColorKey = key;
-    atlasState.activeColorValue = color;
-    atlasState.pendingColorValue = color;
-    if (colorValueInput) colorValueInput.value = color;
-    renderPaletteButtons();
-    drawAtlas();
-    scheduleEditorPrefsSave();
-  });
-  container.appendChild(btn);
-}
-
-function renderPaletteButtons(){
-  if (!mapColorContainer || !worldColorContainer) return;
-  ensurePaletteSeed();
-  ensureActiveColorKey();
-  const activeColor = model.palette.get(atlasState.activeColorKey) || atlasState.activeColorValue;
-  if (colorValueInput){
-    if (!atlasState.pendingColorValue) atlasState.pendingColorValue = activeColor;
-    colorValueInput.value = atlasState.pendingColorValue;
-  }
-
-  mapColorContainer.innerHTML = '';
-  worldColorContainer.innerHTML = '';
-
-  const currentMap = cur();
-  if (currentMap){
-    ensureBackgroundPalette(currentMap);
-    const mapKeys = Array.from(usedPaletteKeys(currentMap)).sort();
-    if (mapKeys.length === 0){
-      const placeholder = document.createElement('span');
-      placeholder.className = 'muted';
-      placeholder.textContent = 'No colors yet';
-      mapColorContainer.appendChild(placeholder);
-    } else {
-      for (const key of mapKeys){
-        appendColorChip(mapColorContainer, key);
-      }
-    }
-  } else {
-    const placeholder = document.createElement('span');
-    placeholder.className = 'muted';
-    placeholder.textContent = 'Select a map';
-    mapColorContainer.appendChild(placeholder);
-  }
-
-  const worldKeys = Array.from(model.palette.keys()).sort();
-  if (worldKeys.length === 0){
-    const placeholder = document.createElement('span');
-    placeholder.className = 'muted';
-    placeholder.textContent = 'Add a color to begin';
-    worldColorContainer.appendChild(placeholder);
-  } else {
-    for (const key of worldKeys){
-      appendColorChip(worldColorContainer, key);
-    }
-  }
-}
-
-function backgroundGridMatrix(map){
-  ensureBackgroundLayer(map);
-  const bg = backgroundGrid(map);
-  if (bg) return bg;
-  const grid = Array.from({length:map.H}, ()=>Array.from({length:map.W}, ()=>' '));
-  map._bgCache = { key: `${map.W}x${map.H}:${grid.length}`, raw: grid.map(r=>r.join('')).join('\n'), grid };
-  map.extras.layers.background.grid = map._bgCache.raw;
-  return map._bgCache.grid;
-}
-
-function setBackgroundTile(map, x, y, code){
-  if (x<0 || y<0 || x>=map.W || y>=map.H) return false;
-  const grid = backgroundGridMatrix(map);
-  if (!grid) return false;
-  const next = code ?? ' ';
-  if (grid[y][x] === next) return false;
-  grid[y][x] = next;
-  const lines = grid.map(row=>row.join('').slice(0,map.W));
-  const serialized = lines.join('\n');
-  map.extras.layers.background.grid = serialized;
-  map._bgCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid };
-  return true;
-}
-
-function resizeBackground(map){
-  if (!map || map.W <=0 || map.H <=0) return;
-  ensureBackgroundLayer(map);
-  const grid = backgroundGridMatrix(map);
-  const newRows = Array.from({length:map.H}, (_,y)=>{
-    const row = grid[y] || [];
-    return Array.from({length:map.W}, (_,x)=> row[x] ?? ' ');
-  });
-  const serialized = newRows.map(r=>r.join('')).join('\n');
-  map.extras.layers.background.grid = serialized;
-  map._bgCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid: newRows };
-}
-
-function getLabelLayer(map, create = false){
-  if (!map) return null;
-  if (!map.extras){
-    if (!create) return null;
-    map.extras = makeEmptyExtras();
-  }
-  if (!map.extras.layers || typeof map.extras.layers !== 'object'){
-    if (!create) return null;
-    map.extras.layers = {};
-  }
-  let layer = map.extras.layers.labels;
-  if (!layer || typeof layer !== 'object'){
-    if (!create) return null;
-    layer = { grid: makeBlankLayerString(map.W, map.H), legend: {} };
-    map.extras.layers.labels = layer;
-  }
-  if (typeof layer.grid !== 'string'){
-    if (!create) return null;
-    layer.grid = makeBlankLayerString(map.W, map.H);
-  }
-  if (!layer.legend || typeof layer.legend !== 'object'){
-    layer.legend = layer.legend && typeof layer.legend === 'object' ? layer.legend : {};
-  }
-  return layer;
-}
-
-function ensureLabelLayer(map){
-  return getLabelLayer(map, true);
-}
-
-function labelGrid(map, create = false){
-  const layer = getLabelLayer(map, create);
-  const cached = map._labelCache;
-  if (!layer) return null;
-  const raw = layer.grid || '';
-  const key = `${map.W}x${map.H}:${raw.length}`;
-  if (cached && cached.key === key && cached.raw === raw) return cached.grid;
-  const lines = raw.replace(/\r\n?/g,"\n").split("\n");
-  const grid = Array.from({length:map.H}, (_,y)=>{
-    const line = lines[y] ?? "";
-    const padded = line.padEnd(map.W, ' ');
-    return Array.from({length:map.W}, (_,x)=> padded[x] ?? ' ');
-  });
-  map._labelCache = { key, raw, grid };
-  return grid;
-}
-
-function labelLegend(map){
-  const layer = getLabelLayer(map, false);
-  return layer?.legend || {};
-}
-
-function setLabelLegendEntry(map, symbol, value){
-  if (!symbol) return false;
-  const legend = ensureLabelLayer(map).legend;
-  if (!value){
-    if (legend[symbol] !== undefined){
-      delete legend[symbol];
-      return true;
-    }
-    return false;
-  }
-  if (legend[symbol] === value) return false;
-  legend[symbol] = value;
-  return true;
-}
-
-function setLabelTile(map, x, y, code){
-  if (x<0 || y<0 || x>=map.W || y>=map.H) return false;
-  const grid = labelGrid(map, true);
-  const next = code ?? ' ';
-  if (grid[y][x] === next) return false;
-  grid[y][x] = next;
-  const lines = grid.map(row=>row.join('').slice(0,map.W));
-  const serialized = lines.join('\n');
-  ensureLabelLayer(map).grid = serialized;
-  map._labelCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid };
-  return true;
-}
-
-function resizeLabels(map){
-  ensureLabelLayer(map);
-  const grid = labelGrid(map, true);
-  const newRows = Array.from({length:map.H}, (_,y)=>{
-    const row = grid[y] || [];
-    return Array.from({length:map.W}, (_,x)=> row[x] ?? ' ');
-  });
-  const serialized = newRows.map(r=>r.join('')).join('\n');
-  map.extras.layers.labels.grid = serialized;
-  map._labelCache = { key: `${map.W}x${map.H}:${serialized.length}`, raw: serialized, grid: newRows };
-}
-
 function clearModel(){
   model.maps.clear();
   model.current = null;
   model.defaultId = null;
   model.defaultSource = null;
   model.manifestFiles = [];
-  model.palette.clear();
-  model.paletteVersion = 0;
-  model.paletteCache = null;
   staleFolderEntries.clear();
   backgroundImageCache.clear();
   atlasInitialized = false;
-  mapsSel.innerHTML = '';
   warn.textContent = '';
   warn.style.display = 'none';
   warn.classList.remove('ok');
@@ -632,7 +258,6 @@ function clearModel(){
     atlasCtx.clearRect(0, 0, atlasCv.width, atlasCv.height);
   }
   console.log('[Editor] Model cleared');
-  renderPaletteButtons();
 }
 
 function uuid(){
@@ -643,7 +268,6 @@ function uuid(){
 }
 
 function makeNewMap(){
-  ensurePaletteSeed();
   const id = uuid();
   const width = DEFAULT_W;
   const height = DEFAULT_H;
@@ -660,9 +284,6 @@ function makeNewMap(){
     source: null,
     _bgImageKey: null
   };
-  resizeBackground(data);
-  resizeLabels(data);
-  ensureBackgroundPalette(data);
   model.maps.set(id, data);
   if (!model.defaultId){
     model.defaultId = id;
@@ -734,7 +355,6 @@ function onEdgeChange(side, toId){
 
 // UI wiring
 document.getElementById('newMap').onclick = makeNewMap;
-mapsSel.onchange = e => setCurrent(e.target.value);
 nameIn.onchange = e => {
   cur().name = e.target.value || cur().name;
   syncHeader();
@@ -1240,19 +860,12 @@ const atlasState = {
   cardPadding: 16,
   headerHeight: 28,
   showGrid: true,
-  showFloor: true,
-  labelMode: false,
-  labelSymbol: '?',
-  labelText: 'Fountain',
+  showWalls: false,
   paintButtonMask: 1,
   activePaintTool: null,
   paintStart: null,
   paintPreview: null,
-  shapeMode: 'paint',
-  colorMode: false,
-  activeColorKey: 'a',
-  activeColorValue: '#ffbf47',
-  pendingColorValue: '#ffbf47'
+  shapeMode: 'paint'
 };
 let atlasInitialized = false;
 let shouldAutoCenter = !hasStoredViewport;
@@ -1270,51 +883,11 @@ if (storedEditorPrefs){
     atlasState.showGrid = storedEditorPrefs.showGrid;
     if (gridToggle) gridToggle.checked = storedEditorPrefs.showGrid;
   }
-  if (typeof storedEditorPrefs.showFloor === 'boolean'){
-    atlasState.showFloor = storedEditorPrefs.showFloor;
-  }
-  if (typeof storedEditorPrefs.colorMode === 'boolean'){
-    atlasState.colorMode = storedEditorPrefs.colorMode;
-    if (colorModeToggle) colorModeToggle.checked = storedEditorPrefs.colorMode;
-  }
-  if (typeof storedEditorPrefs.labelMode === 'boolean'){
-    atlasState.labelMode = storedEditorPrefs.labelMode;
-  }
-  if (typeof storedEditorPrefs.labelSymbol === 'string' && storedEditorPrefs.labelSymbol.length){
-    atlasState.labelSymbol = storedEditorPrefs.labelSymbol;
-  }
-  if (typeof storedEditorPrefs.labelText === 'string'){
-    atlasState.labelText = storedEditorPrefs.labelText;
-  }
-  if (typeof storedEditorPrefs.activeColorKey === 'string'){
-    atlasState.activeColorKey = storedEditorPrefs.activeColorKey;
-  }
-  if (typeof storedEditorPrefs.pendingColorValue === 'string'){
-    atlasState.pendingColorValue = storedEditorPrefs.pendingColorValue;
+  if (typeof storedEditorPrefs.showWalls === 'boolean'){
+    atlasState.showWalls = storedEditorPrefs.showWalls;
+    if (wallToggle) wallToggle.checked = storedEditorPrefs.showWalls;
   }
 }
-
-function updateFloorToggleButton(){
-  if (!floorToggleBtn) return;
-  floorToggleBtn.classList.toggle('active', atlasState.showFloor);
-  floorToggleBtn.textContent = atlasState.showFloor ? 'Floor On' : 'Floor Off';
-  floorToggleBtn.title = atlasState.showFloor ? 'Hide floor overlay' : 'Show floor overlay';
-}
-
-updateFloorToggleButton();
-
-function updateLabelControls(){
-  if (labelModeToggle) labelModeToggle.checked = atlasState.labelMode;
-  if (labelCodeInput){
-    const symbol = atlasState.labelSymbol || '?';
-    labelCodeInput.value = symbol;
-  }
-  if (labelTextInput){
-    labelTextInput.value = atlasState.labelText || '';
-  }
-}
-
-updateLabelControls();
 
 function updateCursor(){
   const isPanning = atlasState.pointerMode === 'pan';
@@ -1454,6 +1027,13 @@ function layout(){
   return positions;
 }
 
+function computeGridLineWidth(){
+  const deviceRatio = window.devicePixelRatio || 1;
+  const zoom = Math.max(atlasState.zoom, 0.0001);
+  const targetPx = Math.max(0.12, Math.min(0.45, 0.18 + zoom * 0.12));
+  return targetPx / (zoom * deviceRatio);
+}
+
 function drawAtlas(){
   resizeAtlasCanvas();
   atlasCtx.save();
@@ -1534,70 +1114,39 @@ function drawAtlas(){
     atlasCtx.fillStyle = '#e5e7eb';
     atlasCtx.fillText(title, cardX + 12, cardY + 6);
 
-    const bgGrid = backgroundGrid(map);
-    const palette = resolveBackgroundPalette(map);
-    const bgHandle = resolveBackgroundImageHandle(map);
-    const hasBgImage = Boolean(bgHandle && bgHandle.status === 'ready');
+    const bgPath = backgroundImagePath(map);
+    const bgHandle = bgPath ? resolveBackgroundImageHandle(map) : null;
+    const hasBgImageSource = Boolean(bgPath);
+    const bgReady = Boolean(bgHandle && bgHandle.status === 'ready');
 
-    if (hasBgImage){
+    const shouldDrawFloor = !hasBgImageSource;
+    const shouldDrawWalls = !hasBgImageSource || atlasState.showWalls;
+
+    if (bgReady){
       drawImageCover(atlasCtx, bgHandle.image, rect.x, rect.y, rect.w, rect.h);
-    } else if (atlasState.showFloor){
+    } else if (shouldDrawFloor){
       atlasCtx.fillStyle = floorColor;
       atlasCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
     }
 
-    if (atlasState.showFloor && bgGrid){
+    if (shouldDrawWalls){
+      const overlayMode = hasBgImageSource && atlasState.showWalls;
+      if (overlayMode) atlasCtx.save();
+      if (overlayMode) atlasCtx.globalAlpha = 0.6;
+      atlasCtx.fillStyle = wallColor;
       for (let y=0;y<map.H;y++){
         for (let x=0;x<map.W;x++){
-          const code = bgGrid[y]?.[x];
-          const color = code ? palette[code] : null;
-          if (!color) continue;
-          atlasCtx.fillStyle = color;
-          atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
+          if (map.grid[y][x] === map.chars.wall){
+            atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
+          }
         }
       }
-    }
-
-    for (let y=0;y<map.H;y++){
-      for (let x=0;x<map.W;x++){
-        if (map.grid[y][x] === map.chars.wall){
-          atlasCtx.fillStyle = wallColor;
-          atlasCtx.fillRect(rect.x + x*tile, rect.y + y*tile, tile, tile);
-        }
-      }
-    }
-
-    const labelsMatrix = labelGrid(map);
-    const labelsLegend = labelLegend(map);
-    if (labelsMatrix){
-      atlasCtx.save();
-      const fontSize = Math.max(10, Math.round(tile * 0.6));
-      atlasCtx.font = `${fontSize}px "Segoe UI", sans-serif`;
-      atlasCtx.textAlign = 'center';
-      atlasCtx.textBaseline = 'middle';
-      atlasCtx.lineJoin = 'round';
-      atlasCtx.lineCap = 'round';
-      const strokeSize = Math.max(1, Math.round(fontSize * 0.2));
-      for (let y=0;y<map.H;y++){
-        for (let x=0;x<map.W;x++){
-          const symbol = labelsMatrix[y]?.[x];
-          if (!symbol || symbol === ' ') continue;
-          const text = labelsLegend?.[symbol] ?? symbol;
-          const cx = rect.x + x*tile + tile/2;
-          const cy = rect.y + y*tile + tile/2;
-          atlasCtx.lineWidth = strokeSize;
-          atlasCtx.strokeStyle = 'rgba(15,23,42,0.72)';
-          atlasCtx.fillStyle = '#f9fafb';
-          atlasCtx.strokeText(text, cx, cy);
-          atlasCtx.fillText(text, cx, cy);
-        }
-      }
-      atlasCtx.restore();
+      if (overlayMode) atlasCtx.restore();
     }
 
     if (atlasState.showGrid){
       atlasCtx.strokeStyle = gridColor;
-      atlasCtx.lineWidth = Math.max(1/atlasState.zoom, 0.5);
+      atlasCtx.lineWidth = computeGridLineWidth();
       atlasCtx.beginPath();
       for (let gx=0; gx<=map.W; gx++){
         const px = rect.x + gx*tile;
@@ -1629,7 +1178,7 @@ function drawAtlas(){
     if (atlasState.paintPreview && atlasState.paintPreview.mapId === id){
       const preview = atlasState.paintPreview;
       const isErase = preview.mode === 'erase';
-      const baseColor = isErase ? '#f87171' : (atlasState.colorMode ? atlasState.activeColorValue : '#22c55e');
+  const baseColor = isErase ? '#f87171' : '#22c55e';
       atlasCtx.save();
       atlasCtx.globalAlpha = isErase ? 0.25 : 0.35;
       atlasCtx.fillStyle = baseColor;
@@ -1691,7 +1240,6 @@ function centerAtlasOnContent(){
   atlasState.zoom = nextZoom;
   atlasState.pan.x = rect.width/2 - (bounds.minX + contentW/2) * nextZoom;
   atlasState.pan.y = rect.height/2 - (bounds.minY + contentH/2) * nextZoom;
-  if (zoomInput) zoomInput.value = nextZoom.toFixed(2);
 }
 
 function atlasWorldPoint(e){
@@ -1712,61 +1260,9 @@ function hitTestAtlas(x,y){
   return null;
 }
 
-function ensureActiveColorKey(){
-  ensurePaletteSeed();
-  const prevKey = atlasState.activeColorKey;
-  if (atlasState.activeColorKey && model.palette.has(atlasState.activeColorKey)){
-    atlasState.activeColorValue = model.palette.get(atlasState.activeColorKey);
-  } else {
-    const first = model.palette.keys().next().value;
-    if (first){
-      atlasState.activeColorKey = first;
-      atlasState.activeColorValue = model.palette.get(first);
-    } else {
-      atlasState.activeColorKey = 'a';
-      atlasState.activeColorValue = '#ffbf47';
-    }
-  }
-  if (atlasState.activeColorKey !== prevKey){
-    scheduleEditorPrefsSave();
-  }
-}
-
-function ensureActivePaletteEntry(map){
-  if (!map) return;
-  ensureActiveColorKey();
-  const key = atlasState.activeColorKey;
-  const color = model.palette.get(key);
-  if (!color) return;
-  ensureBackgroundPalette(map);
-  map.extras.palette[key] = color;
-}
-
 function paintTile(map, localX, localY, activeTool){
   if (!map) return false;
   if (localX < 0 || localY < 0 || localX >= map.W || localY >= map.H) return false;
-  if (atlasState.labelMode){
-    ensureLabelLayer(map);
-    const symbolRaw = atlasState.labelSymbol || '?';
-    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
-    const next = (activeTool === 'erase') ? ' ' : symbol;
-    let changed = setLabelTile(map, localX, localY, next);
-    if (activeTool !== 'erase'){
-      const text = (atlasState.labelText ?? '').trim();
-      const display = text || symbol;
-      changed = setLabelLegendEntry(map, symbol, display) || changed;
-    }
-    return changed;
-  }
-  if (atlasState.colorMode){
-    ensureActiveColorKey();
-    ensureBackgroundLayer(map);
-    const code = (activeTool === 'erase') ? ' ' : atlasState.activeColorKey;
-    if (code !== ' '){
-      ensureActivePaletteEntry(map);
-    }
-    return setBackgroundTile(map, localX, localY, code);
-  }
   if (activeTool === 'erase'){
     if (map.grid[localY][localX] === map.chars.floor) return false;
     map.grid[localY][localX] = map.chars.floor;
@@ -1794,7 +1290,6 @@ function applyPointTool(worldX, worldY, forcedTool = null){
   const localX = Math.floor((worldX - hit.x) / hit.tile);
   const localY = Math.floor((worldY - hit.y) / hit.tile);
   const activeTool = forcedTool ?? tool;
-  if ((atlasState.colorMode || atlasState.labelMode) && activeTool === 'spawn') return;
 
   const changed = paintTile(map, localX, localY, activeTool);
   if (!changed) return;
@@ -1807,11 +1302,8 @@ function applyPointTool(worldX, worldY, forcedTool = null){
   }
 
   syncToml();
-  if (!atlasState.colorMode || activeTool === 'spawn'){
-    validateSpawn();
-  }
+  validateSpawn();
   runLint();
-  renderPaletteButtons();
   drawAtlas();
 }
 
@@ -1839,14 +1331,6 @@ function collectLinePoints(start, end){
 function paintLineBetween(map, start, end, action){
   const points = collectLinePoints(start, end);
   let changed = false;
-  if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
-  if (atlasState.labelMode && action === 'paint'){
-    ensureLabelLayer(map);
-    const symbolRaw = atlasState.labelSymbol || '?';
-    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
-    const text = (atlasState.labelText ?? '').trim() || symbol;
-    setLabelLegendEntry(map, symbol, text);
-  }
   for (const pt of points){
     const mode = action === 'erase' ? 'erase' : 'brush';
     changed = paintTile(map, pt.x, pt.y, mode) || changed;
@@ -1888,14 +1372,6 @@ function paintRectArea(map, start, end, action){
   const filled = action === 'erase';
   const points = collectRectPoints(start, end, filled);
   let changed = false;
-  if (atlasState.colorMode && action === 'paint') ensureActivePaletteEntry(map);
-  if (atlasState.labelMode && action === 'paint'){
-    ensureLabelLayer(map);
-    const symbolRaw = atlasState.labelSymbol || '?';
-    const symbol = (symbolRaw.length ? symbolRaw[0] : '?');
-    const text = (atlasState.labelText ?? '').trim() || symbol;
-    setLabelLegendEntry(map, symbol, text);
-  }
   for (const pt of points){
     const mode = action === 'erase' ? 'erase' : 'brush';
     changed = paintTile(map, pt.x, pt.y, mode) || changed;
@@ -1907,7 +1383,6 @@ function commitShape(mapId, activeTool, start, end, mode){
   const map = model.maps.get(mapId);
   if (!map) return false;
   if (!start || !end) return false;
-  if (atlasState.colorMode && activeTool === 'spawn') return false;
   let changed = false;
   if (activeTool === 'line'){
     changed = paintLineBetween(map, start, end, mode);
@@ -1922,9 +1397,8 @@ function commitShape(mapId, activeTool, start, end, mode){
   }
 
   syncToml();
-  if (!atlasState.colorMode) validateSpawn();
+  validateSpawn();
   runLint();
-  renderPaletteButtons();
   drawAtlas();
   return true;
 }
@@ -2140,7 +1614,6 @@ function setZoom(nextZoom, pivot){
   atlasState.zoom = clamped;
   atlasState.pan.x = screen.x - world.x * clamped;
   atlasState.pan.y = screen.y - world.y * clamped;
-  if (zoomInput) zoomInput.value = clamped.toFixed(2);
   drawAtlas();
   scheduleEditorPrefsSave();
 }
@@ -2152,12 +1625,6 @@ function handleWheel(e){
   const nextZoom = atlasState.zoom * scale;
   const pt = atlasWorldPoint(e);
   setZoom(nextZoom, { world: { x: pt.x, y: pt.y }, screen: { x: pt.screenX, y: pt.screenY } });
-}
-
-function resetAtlasView(){
-  shouldAutoCenter = true;
-  atlasInitialized = false;
-  drawAtlas();
 }
 
 atlasCv.addEventListener('pointerdown', handlePointerDown);
@@ -2174,16 +1641,6 @@ atlasCv.addEventListener('pointerleave', e=>{
 atlasCv.addEventListener('wheel', handleWheel, { passive:false });
 atlasCv.addEventListener('contextmenu', e=> e.preventDefault());
 
-if (zoomInput){
-  zoomInput.value = atlasState.zoom.toFixed(2);
-  zoomInput.addEventListener('input', e=>{
-    const next = parseFloat(e.target.value);
-    if (!Number.isFinite(next)) return;
-    setZoom(next);
-    atlasInitialized = true;
-  });
-}
-
 if (gridToggle){
   gridToggle.checked = !!atlasState.showGrid;
   atlasState.showGrid = gridToggle.checked;
@@ -2194,117 +1651,13 @@ if (gridToggle){
   });
 }
 
-if (floorToggleBtn){
-  floorToggleBtn.addEventListener('click', ()=>{
-    atlasState.showFloor = !atlasState.showFloor;
-    updateFloorToggleButton();
+if (wallToggle){
+  wallToggle.checked = !!atlasState.showWalls;
+  atlasState.showWalls = wallToggle.checked;
+  wallToggle.addEventListener('change', e=>{
+    atlasState.showWalls = e.target.checked;
     drawAtlas();
     scheduleEditorPrefsSave();
-  });
-}
-
-if (labelModeToggle){
-  labelModeToggle.checked = !!atlasState.labelMode;
-  atlasState.labelMode = labelModeToggle.checked;
-  labelModeToggle.addEventListener('change', e=>{
-    atlasState.labelMode = e.target.checked;
-    updateCursor();
-    drawAtlas();
-    scheduleEditorPrefsSave();
-  });
-}
-
-if (labelCodeInput){
-  const initial = atlasState.labelSymbol || '?';
-  labelCodeInput.value = initial;
-  labelCodeInput.addEventListener('input', e=>{
-    const raw = (e.target.value || '').trim();
-    const symbol = raw ? raw[0] : '?';
-    atlasState.labelSymbol = symbol;
-    if (symbol !== e.target.value){
-      e.target.value = symbol;
-    }
-    scheduleEditorPrefsSave();
-  });
-}
-
-if (labelTextInput){
-  labelTextInput.value = atlasState.labelText || '';
-  const updateLegend = ()=>{
-    const map = cur();
-    if (!map) return;
-    const symbolRaw = atlasState.labelSymbol || '?';
-    const symbol = symbolRaw.length ? symbolRaw[0] : '?';
-    const text = (atlasState.labelText ?? '').trim();
-    if (text){
-      if (setLabelLegendEntry(map, symbol, text)){
-        syncToml();
-      }
-    }
-    drawAtlas();
-  };
-  labelTextInput.addEventListener('input', e=>{
-    atlasState.labelText = e.target.value;
-    scheduleEditorPrefsSave();
-    updateLegend();
-  });
-  labelTextInput.addEventListener('change', updateLegend);
-}
-
-if (colorModeToggle){
-  colorModeToggle.checked = !!atlasState.colorMode;
-  atlasState.colorMode = colorModeToggle.checked;
-  colorModeToggle.addEventListener('change', e=>{
-    atlasState.colorMode = e.target.checked;
-    atlasState.paintPreview = null;
-    renderPaletteButtons();
-    drawAtlas();
-    scheduleEditorPrefsSave();
-  });
-}
-
-if (colorValueInput){
-  colorValueInput.value = atlasState.pendingColorValue;
-  atlasState.pendingColorValue = colorValueInput.value || atlasState.pendingColorValue;
-  colorValueInput.addEventListener('input', e=>{
-    atlasState.pendingColorValue = e.target.value || '#ffffff';
-    scheduleEditorPrefsSave();
-  });
-}
-
-if (addColorBtn){
-  addColorBtn.addEventListener('click', e=>{
-    e.preventDefault();
-    ensurePaletteSeed();
-    const color = (atlasState.pendingColorValue || colorValueInput?.value || '#ffffff').toLowerCase();
-    let key = findPaletteKeyByColor(color);
-    if (!key){
-      key = allocatePaletteKey();
-      model.palette.set(key, color);
-      markPaletteDirty();
-    }
-    atlasState.activeColorKey = key;
-    atlasState.activeColorValue = model.palette.get(key) || color;
-    atlasState.pendingColorValue = atlasState.activeColorValue;
-    if (colorValueInput) colorValueInput.value = atlasState.activeColorValue;
-    const map = cur();
-    if (map){
-      ensureBackgroundPalette(map);
-      ensureActivePaletteEntry(map);
-    }
-    renderPaletteButtons();
-    drawAtlas();
-    scheduleEditorPrefsSave();
-  });
-}
-
-if (resetViewBtn){
-  resetViewBtn.onclick = ()=> resetAtlasView();
-}
-
-if (helpBtn){
-  helpBtn.addEventListener('click', ()=>{
-    showNotification('Maps stay 99x70 with a 2x2 spawn. Hold space or middle mouse to pan. Right-click erases any tool.');
   });
 }
 
@@ -2354,17 +1707,6 @@ function syncHeader(){
   const m = cur();
   if (!m) return;
   nameIn.value = m.name;
-
-  mapsSel.innerHTML = '';
-  for (const [id, map] of model.maps.entries()){
-    const isDefault = id === model.defaultId;
-    const o = document.createElement('option');
-    o.value = id;
-  const suffix = isDefault ? ` (default · ${id.slice(0,8)})` : ` (${id.slice(0,8)})`;
-    o.textContent = `${map.name}${suffix}`;
-    if (id===model.current) o.selected = true;
-    mapsSel.appendChild(o);
-  }
   if (setDefaultBtn) setDefaultBtn.disabled = (m.id === model.defaultId);
 
   const opts = [['none','— None —'], ...Array.from(model.maps.entries()).map(([id,m])=>[id, m.name])];
@@ -2376,7 +1718,6 @@ function syncHeader(){
     sel.value = cur().exits[side] ?? 'none';
   }
   validateSpawn();
-  renderPaletteButtons();
 }
 
 // Keep TOML textarea current
@@ -2428,26 +1769,6 @@ function toToml(m){
     out.push("");
   }
 
-  if (extras.legend && Object.keys(extras.legend).length){
-    out.push(`[legend]`);
-    for (const [key, value] of Object.entries(extras.legend)){
-      const serialized = formatTomlValue(value);
-      if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
-    }
-    out.push("");
-  }
-
-  const paletteEntries = mapPaletteEntries(m);
-  extras.palette = { ...paletteEntries };
-  if (Object.keys(paletteEntries).length){
-    out.push(`[palette]`);
-    for (const [key, value] of Object.entries(paletteEntries)){
-      const serialized = formatTomlValue(value);
-      if (serialized !== null) out.push(`${formatTomlKey(key)} = ${serialized}`);
-    }
-    out.push("");
-  }
-
   if (extras.poi && extras.poi.length){
     for (const entry of extras.poi){
       out.push(`[[poi]]`);
@@ -2463,6 +1784,7 @@ function toToml(m){
 
   if (extras.layers && Object.keys(extras.layers).length){
     for (const [layerName, layer] of Object.entries(extras.layers)){
+      if (layerName === 'labels') continue;
       if (!layer || typeof layer !== 'object') continue;
       out.push(`[layers.${layerName}]`);
       const nested = [];
@@ -2563,10 +1885,6 @@ function fromToml(txt, meta = {}){
     filename: meta.filename ?? null,
     source: meta.source ?? null
   };
-  registerPaletteEntries(extras.palette);
-  resizeBackground(map);
-  resizeLabels(map);
-  ensureBackgroundPalette(map);
   map._bgImageKey = backgroundImagePath(map);
   return map;
 }
@@ -2597,13 +1915,7 @@ function saveEditorPrefs(){
     zoom: atlasState.zoom,
     pan: { x: atlasState.pan.x, y: atlasState.pan.y },
     showGrid: atlasState.showGrid,
-  showFloor: atlasState.showFloor,
-    colorMode: atlasState.colorMode,
-  labelMode: atlasState.labelMode,
-  labelSymbol: atlasState.labelSymbol,
-  labelText: atlasState.labelText,
-    activeColorKey: atlasState.activeColorKey,
-    pendingColorValue: atlasState.pendingColorValue,
+    showWalls: atlasState.showWalls,
     tool,
     currentMap: (model.current && model.maps.has(model.current)) ? model.current : null
   };
