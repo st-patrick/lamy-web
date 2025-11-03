@@ -1,4 +1,11 @@
-we are making pre rendered bg maps for a videogame. Topdown view, little to no perspective. Looks like pencil drawn. The setting is fantasy medieval like. Render the first map, a part of the village with the main character's home and another, smaller house. We can see the insides of the house
+pre rendered background for a topdown RPG section, one screen of multiple in a level or area. Topdown view, no perspective. pencil drawn, black and white. The setting is fantasy medieval like. Format is 99x70.
 
 
-use the attached img as a base layout and also respect the format of 99x70
+
+One path going from the top edge to the bottom edge. We are coming from the top hill / mountain-y area going to the bottom greener pastures
+
+
+
+
+
+It is crucial that you remember this is for a topdown RPG, so always draw from a bird's eye view. Use a DnD like style

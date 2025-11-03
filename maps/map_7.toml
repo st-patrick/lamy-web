@@ -1,13 +1,13 @@
 id = "d14f996a-d287-495d-953e-38daee136c65"
-name = "Map 7"
+name = "Mountain Fork"
 
 [tiles]
 wall = "#"
 floor = " "
 
 [spawn]
-x = 1
-y = 1
+x = 48
+y = 32
 w = 2
 h = 2
 
@@ -30,8 +30,8 @@ grid = """
                                          #                  #                                      
                                          #                  #                                      
                                          #                  #                                      
-                                         #                  #                                      
-                                         #                  ##                                     
+                                         #                  #   #                                  
+                                         #                  ##  #                                  
                                          #                   #                                     
 ############                             #                   #                                     
            ######                       ##                   #                                     
@@ -48,7 +48,7 @@ grid = """
                                                                  #                                 
                                                                  #                                 
 ############                                                     #                                 
-           ###                                                   ##                                
+           ###                         #                         ##                                
              ###                                                  #                                
                ####                                               #                                
                   #######                                        ##                                
@@ -88,4 +88,6 @@ grid = """
 image = "bg/mountain-fork.png"
 
 [exits]
+left = "285b2403-e81c-4d61-9a1e-060bcb156828"
 top = "720fd469-18c2-4298-bb39-b1be0a3e9d15"
+bottom = "609aa6a9-2caa-421f-92a7-e7782a3926d0"

@@ -6,12 +6,14 @@
     "maps/map_4.toml",
     "maps/map_5.toml",
     "maps/map_6.toml",
-    "maps/map_7.toml"
+    "maps/map_7.toml",
+    "maps/mountain_hut.toml",
+    "maps/road_to_bridge.toml"
   ],
   "default": {
-    "id": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
-    "file": "maps/plains.toml"
+    "id": "d14f996a-d287-495d-953e-38daee136c65",
+    "file": "maps/map_7.toml"
   },
-  "defaultId": "a1e4f9f0-55e8-4778-b0cc-0d6a6f1b0c11",
-  "defaultFile": "maps/plains.toml"
+  "defaultId": "d14f996a-d287-495d-953e-38daee136c65",
+  "defaultFile": "maps/map_7.toml"
 }
