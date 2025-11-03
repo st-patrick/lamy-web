@@ -1,0 +1,4 @@
+we are making pre rendered bg maps for a videogame. Topdown view, little to no perspective. Looks like pencil drawn. The setting is fantasy medieval like. Render the first map, a part of the village with the main character's home and another, smaller house. We can see the insides of the house
+
+
+use the attached img as a base layout and also respect the format of 99x70
